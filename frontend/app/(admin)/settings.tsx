@@ -72,8 +72,8 @@ export default function SettingsScreen() {
         {
           text: t('logout'),
           style: 'destructive',
-          onPress: () => {
-            logout();
+          onPress: async () => {
+            await logout();
             router.replace('/(auth)/login');
           },
         },
