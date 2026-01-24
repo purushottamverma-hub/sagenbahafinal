@@ -1271,6 +1271,57 @@ async def create_farmer_purchase(purchase: FarmerPurchaseCreate, current_user: d
     
     return purchase_obj
 
+@api_router.get("/farmer-purchases")
+async def get_farmer_purchases(current_user: dict = Depends(get_current_user)):
+    """Get all farmer purchases"""
+    purchases = await db.farmer_purchases.find().sort("created_at", -1).to_list(1000)
+    return purchases
+
+@api_router.post("/farmer-purchases")
+async def create_farmer_purchase_alt(purchase: FarmerPurchaseCreate, current_user: dict = Depends(get_current_user)):
+    """Record produce purchase from farmer (alternative endpoint)"""
+    farmer = await db.farmers.find_one({"id": purchase.farmer_id})
+    if not farmer:
+        raise HTTPException(status_code=404, detail="Farmer not found")
+    
+    product = await db.products.find_one({"id": purchase.product_id})
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    receipt_number = await generate_receipt_number()
+    total = purchase.quantity * purchase.rate
+    
+    purchase_obj = FarmerPurchase(
+        farmer_id=purchase.farmer_id,
+        farmer_name=farmer["name"],
+        product_id=purchase.product_id,
+        product_name=product["name"],
+        quantity=purchase.quantity,
+        rate=purchase.rate,
+        total_amount=total,
+        payment_mode=purchase.payment_mode,
+        cash_amount=total if purchase.payment_mode == "cash" else 0,
+        online_amount=total if purchase.payment_mode == "online" else 0,
+        credit_amount=total if purchase.payment_mode == "credit" else 0,
+        receipt_number=receipt_number,
+        created_by=current_user["id"]
+    )
+    await db.farmer_purchases.insert_one(purchase_obj.dict())
+    
+    # Update farmer ledger
+    paid_amount = purchase_obj.cash_amount + purchase_obj.online_amount
+    await db.farmers.update_one(
+        {"id": purchase.farmer_id},
+        {"$inc": {
+            "total_supplied": purchase.quantity,
+            "total_payable": total,
+            "total_paid": paid_amount,
+            "outstanding_dues": purchase_obj.credit_amount
+        }, "$set": {"updated_at": datetime.utcnow()}}
+    )
+    
+    return purchase_obj
+
 @api_router.post("/farmers/payment")
 async def record_farmer_payment(payment: FarmerPaymentCreate, current_user: dict = Depends(require_admin)):
     """Record payment to farmer"""
