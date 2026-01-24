@@ -1078,4 +1078,30 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     color: '#666',
   },
+  billActions: {
+    flexDirection: 'row',
+    gap: 12,
+    padding: 16,
+    paddingTop: 8,
+  },
+  billActionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: 10,
+  },
+  printBtn: {
+    backgroundColor: '#2E7D32',
+  },
+  shareBtn: {
+    backgroundColor: '#1976D2',
+  },
+  billActionText: {
+    color: '#FFF',
+    fontSize: 15,
+    fontWeight: '600',
+  },
 });
