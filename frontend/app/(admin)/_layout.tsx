@@ -2,10 +2,12 @@ import React from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from '../../src/utils/useTranslation';
+import { useSettingsStore } from '../../src/store/settingsStore';
 import { Platform, View, Text, StyleSheet } from 'react-native';
 
 export default function AdminLayout() {
   const { t } = useTranslation();
+  const language = useSettingsStore((state) => state.language);
 
   return (
     <Tabs
@@ -22,7 +24,7 @@ export default function AdminLayout() {
           paddingTop: 8,
         },
         tabBarLabelStyle: {
-          fontSize: 11,
+          fontSize: 10,
           fontWeight: '600',
         },
       }}
@@ -46,6 +48,15 @@ export default function AdminLayout() {
         }}
       />
       <Tabs.Screen
+        name="purchase"
+        options={{
+          title: language === 'hi' ? 'खरीद' : 'Purchase',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="basket" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="stock"
         options={{
           title: t('stock'),
@@ -55,11 +66,11 @@ export default function AdminLayout() {
         }}
       />
       <Tabs.Screen
-        name="manage"
+        name="users"
         options={{
-          title: t('outlets'),
+          title: language === 'hi' ? 'उपयोगकर्ता' : 'Users',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="business" size={size} color={color} />
+            <Ionicons name="people" size={size} color={color} />
           ),
         }}
       />
@@ -70,6 +81,12 @@ export default function AdminLayout() {
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="settings" size={size} color={color} />
           ),
+        }}
+      />
+      <Tabs.Screen
+        name="manage"
+        options={{
+          href: null, // Hide from tab bar but still accessible
         }}
       />
     </Tabs>
