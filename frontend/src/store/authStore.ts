@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage, StateStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Platform } from 'react-native';
 
 interface User {
   id: string;
@@ -21,27 +20,7 @@ interface AuthState {
   setHasHydrated: (state: boolean) => void;
 }
 
-// Web storage wrapper
-const webStorage: StateStorage = {
-  getItem: (name: string): string | null => {
-    try {
-      return localStorage.getItem(name);
-    } catch {
-      return null;
-    }
-  },
-  setItem: (name: string, value: string): void => {
-    try {
-      localStorage.setItem(name, value);
-    } catch {}
-  },
-  removeItem: (name: string): void => {
-    try {
-      localStorage.removeItem(name);
-    } catch {}
-  },
-};
-
+// Use AsyncStorage which works for both web and native in Expo
 export const useAuthStore = create<AuthState>()(
   persist(
     (set) => ({
@@ -63,9 +42,7 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'auth-storage',
-      storage: Platform.OS === 'web' 
-        ? createJSONStorage(() => webStorage)
-        : createJSONStorage(() => AsyncStorage),
+      storage: createJSONStorage(() => AsyncStorage),
       onRehydrateStorage: () => (state) => {
         state?.setHasHydrated(true);
       },
