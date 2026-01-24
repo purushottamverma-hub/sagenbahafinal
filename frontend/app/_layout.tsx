@@ -1,51 +1,63 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useAuthStore } from '../src/store/authStore';
-import { View, ActivityIndicator } from 'react-native';
+import { View, ActivityIndicator, Text, StyleSheet } from 'react-native';
 
 export default function RootLayout() {
   const { isAuthenticated, user } = useAuthStore();
   const segments = useSegments();
   const router = useRouter();
-  const [isReady, setIsReady] = React.useState(false);
+  const [isReady, setIsReady] = useState(false);
+  const [hasNavigated, setHasNavigated] = useState(false);
 
   useEffect(() => {
-    // Give zustand time to rehydrate
-    const timer = setTimeout(() => setIsReady(true), 100);
+    // Give zustand time to rehydrate from AsyncStorage
+    const timer = setTimeout(() => {
+      setIsReady(true);
+    }, 500);
     return () => clearTimeout(timer);
   }, []);
 
   useEffect(() => {
-    if (!isReady) return;
+    if (!isReady || hasNavigated) return;
 
     const inAuthGroup = segments[0] === '(auth)';
     const inAdminGroup = segments[0] === '(admin)';
     const inAgentGroup = segments[0] === '(agent)';
 
-    if (!isAuthenticated && !inAuthGroup) {
-      // Not logged in, redirect to login
-      router.replace('/(auth)/login');
-    } else if (isAuthenticated && inAuthGroup) {
-      // Logged in, redirect based on role
-      if (user?.role === 'admin') {
-        router.replace('/(admin)');
-      } else {
+    // Initial navigation based on auth state
+    if (!isAuthenticated) {
+      if (!inAuthGroup) {
+        setHasNavigated(true);
+        router.replace('/(auth)/login');
+      }
+    } else {
+      // User is authenticated
+      if (inAuthGroup) {
+        setHasNavigated(true);
+        if (user?.role === 'admin') {
+          router.replace('/(admin)');
+        } else {
+          router.replace('/(agent)');
+        }
+      } else if (user?.role === 'agent' && inAdminGroup) {
+        setHasNavigated(true);
         router.replace('/(agent)');
       }
-    } else if (isAuthenticated && user?.role === 'agent' && inAdminGroup) {
-      // Agent trying to access admin area
-      router.replace('/(agent)');
-    } else if (isAuthenticated && user?.role === 'admin' && inAgentGroup) {
-      // Admin can access agent area, but default to admin
-      // Allow this as admin might want to see agent view
     }
-  }, [isAuthenticated, segments, isReady, user]);
+  }, [isAuthenticated, segments, isReady, user, hasNavigated]);
+
+  // Reset navigation flag when auth state changes
+  useEffect(() => {
+    setHasNavigated(false);
+  }, [isAuthenticated]);
 
   if (!isReady) {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F5F5F5' }}>
+      <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#2E7D32" />
+        <Text style={styles.loadingText}>Loading...</Text>
       </View>
     );
   }
@@ -62,3 +74,17 @@ export default function RootLayout() {
     </>
   );
 }
+
+const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#666',
+  },
+});
