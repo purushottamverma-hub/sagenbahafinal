@@ -538,6 +538,163 @@ async def delete_user(user_id: str, current_user: dict = Depends(require_admin))
         raise HTTPException(status_code=404, detail="User not found")
     return {"message": "User deactivated successfully"}
 
+@api_router.get("/users/pending")
+async def get_pending_users(current_user: dict = Depends(require_admin)):
+    """Get all pending agent registrations"""
+    users = await db.users.find({"status": "pending", "role": "agent"}).to_list(1000)
+    return [User(
+        id=u["id"],
+        username=u["username"],
+        full_name=u["full_name"],
+        role=u["role"],
+        outlet_id=u.get("outlet_id"),
+        mobile=u.get("mobile"),
+        village=u.get("village"),
+        is_active=u.get("is_active", False),
+        status=u.get("status", "pending"),
+        created_at=u.get("created_at", datetime.utcnow()),
+        updated_at=u.get("updated_at", datetime.utcnow())
+    ) for u in users]
+
+@api_router.post("/users/approve")
+async def approve_agent(request: ApproveAgentRequest, current_user: dict = Depends(require_admin)):
+    """Approve or reject agent registration and assign outlet"""
+    user = await db.users.find_one({"id": request.user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if user.get("role") != "agent":
+        raise HTTPException(status_code=400, detail="Only agent registrations can be approved")
+    
+    if request.approved:
+        # Verify outlet exists
+        outlet = await db.outlets.find_one({"id": request.outlet_id})
+        if not outlet:
+            raise HTTPException(status_code=404, detail="Outlet not found")
+        
+        await db.users.update_one(
+            {"id": request.user_id},
+            {"$set": {
+                "status": "active",
+                "is_active": True,
+                "outlet_id": request.outlet_id,
+                "updated_at": datetime.utcnow()
+            }}
+        )
+        return {"message": "Agent approved and outlet assigned successfully"}
+    else:
+        await db.users.update_one(
+            {"id": request.user_id},
+            {"$set": {
+                "status": "rejected",
+                "is_active": False,
+                "updated_at": datetime.utcnow()
+            }}
+        )
+        return {"message": "Agent registration rejected"}
+
+# ===================== PRODUCT REQUEST ROUTES (Farmer Buy/Sell Requests) =====================
+
+@api_router.post("/product-requests")
+async def create_product_request(request: ProductRequestBase, current_user: dict = Depends(get_current_user)):
+    """Create a buy/sell request (for farmers)"""
+    if current_user["role"] not in ["farmer", "agent"]:
+        raise HTTPException(status_code=403, detail="Only farmers and agents can create product requests")
+    
+    product = await db.products.find_one({"id": request.product_id})
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    req_obj = ProductRequest(
+        **request.dict(),
+        farmer_id=current_user["id"],
+        farmer_name=current_user.get("full_name"),
+        product_name=product["name"],
+        status="pending"
+    )
+    
+    await db.product_requests.insert_one(req_obj.dict())
+    return {"message": "Request submitted successfully", "request_id": req_obj.id}
+
+@api_router.get("/product-requests")
+async def get_product_requests(status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Get product requests - farmers see their own, agents/admins see all for their outlet"""
+    query = {}
+    
+    if current_user["role"] == "farmer":
+        query["farmer_id"] = current_user["id"]
+    elif current_user["role"] == "agent":
+        # Agents see requests assigned to their outlet or unassigned
+        query["$or"] = [
+            {"outlet_id": current_user.get("outlet_id")},
+            {"outlet_id": None}
+        ]
+    # Admin sees all
+    
+    if status:
+        query["status"] = status
+    
+    requests = await db.product_requests.find(query).sort("created_at", -1).to_list(1000)
+    return requests
+
+@api_router.put("/product-requests/{request_id}")
+async def update_product_request(request_id: str, updates: dict, current_user: dict = Depends(get_current_user)):
+    """Update a product request (approve/reject/complete)"""
+    if current_user["role"] not in ["agent", "admin"]:
+        raise HTTPException(status_code=403, detail="Only agents and admins can process requests")
+    
+    req = await db.product_requests.find_one({"id": request_id})
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    
+    updates["processed_by"] = current_user["id"]
+    updates["processed_at"] = datetime.utcnow()
+    
+    if current_user["role"] == "agent":
+        updates["outlet_id"] = current_user.get("outlet_id")
+    
+    await db.product_requests.update_one({"id": request_id}, {"$set": updates})
+    return {"message": "Request updated successfully"}
+
+@api_router.get("/my-transactions")
+async def get_my_transactions(current_user: dict = Depends(get_current_user)):
+    """Get transactions for current user (farmers see their sales/purchases)"""
+    if current_user["role"] == "farmer":
+        # Get farmer purchases (when FPO bought from this farmer)
+        farmer = await db.farmers.find_one({"mobile": current_user.get("mobile")})
+        if farmer:
+            purchases = await db.farmer_purchases.find({"farmer_id": farmer["id"]}).sort("created_at", -1).to_list(100)
+        else:
+            purchases = []
+        
+        # Get product requests
+        requests = await db.product_requests.find({"farmer_id": current_user["id"]}).sort("created_at", -1).to_list(100)
+        
+        return {
+            "purchases": purchases,
+            "requests": requests,
+            "farmer_profile": farmer
+        }
+    elif current_user["role"] == "agent":
+        # Agents see their outlet transactions plus their own farmer transactions
+        outlet_id = current_user.get("outlet_id")
+        
+        sales = await db.sales.find({"outlet_id": outlet_id}).sort("created_at", -1).to_list(100) if outlet_id else []
+        
+        # Also check if agent is registered as farmer
+        farmer = await db.farmers.find_one({"mobile": current_user.get("mobile")})
+        farmer_purchases = []
+        if farmer:
+            farmer_purchases = await db.farmer_purchases.find({"farmer_id": farmer["id"]}).sort("created_at", -1).to_list(100)
+        
+        return {
+            "outlet_sales": sales,
+            "farmer_purchases": farmer_purchases,
+            "farmer_profile": farmer
+        }
+    
+    return {"message": "No transactions"}
+
 # ===================== OUTLET ROUTES =====================
 
 @api_router.post("/outlets", response_model=Outlet)
