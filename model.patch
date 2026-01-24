@@ -1,0 +1,16 @@
+diff --git a/frontend/app/index.tsx b/frontend/app/index.tsx
+index fd25cac..43d94c6 100644
+--- a/frontend/app/index.tsx
++++ b/frontend/app/index.tsx
+@@ -14,8 +14,10 @@ export default function Index() {
+         router.replace('/(auth)/login');
+       } else if (user?.role === 'admin') {
+         router.replace('/(admin)');
+-      } else {
++      } else if (user?.role === 'agent') {
+         router.replace('/(agent)');
++      } else if (user?.role === 'farmer') {
++        router.replace('/(farmer)');
+       }
+     }, 100);
+ 
