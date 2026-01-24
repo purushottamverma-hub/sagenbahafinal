@@ -1,5 +1,7 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage, StateStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 
 interface User {
   id: string;
@@ -14,68 +16,89 @@ interface AuthState {
   user: User | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  _hasHydrated: boolean;
   setAuth: (token: string, user: User) => void;
   logout: () => void;
-  loadStoredAuth: () => Promise<void>;
+  setHasHydrated: (state: boolean) => void;
 }
 
-export const useAuthStore = create<AuthState>((set, get) => ({
-  token: null,
-  user: null,
-  isAuthenticated: false,
-  isLoading: true,
-  
-  setAuth: async (token: string, user: User) => {
-    // Store to AsyncStorage
-    try {
-      await AsyncStorage.setItem('auth-token', token);
-      await AsyncStorage.setItem('auth-user', JSON.stringify(user));
-    } catch (e) {
-      console.error('Failed to save auth:', e);
+// Custom storage adapter that works on both web and native
+const storage: StateStorage = {
+  getItem: async (name: string): Promise<string | null> => {
+    if (Platform.OS === 'web') {
+      try {
+        return localStorage.getItem(name);
+      } catch {
+        return null;
+      }
     }
-    
-    set({
-      token,
-      user,
-      isAuthenticated: true
-    });
+    return AsyncStorage.getItem(name);
   },
-  
-  logout: async () => {
-    // Clear from AsyncStorage
-    try {
-      await AsyncStorage.removeItem('auth-token');
-      await AsyncStorage.removeItem('auth-user');
-    } catch (e) {
-      console.error('Failed to clear auth:', e);
+  setItem: async (name: string, value: string): Promise<void> => {
+    if (Platform.OS === 'web') {
+      try {
+        localStorage.setItem(name, value);
+      } catch {
+        console.error('Failed to save to localStorage');
+      }
+      return;
     }
-    
-    set({
+    await AsyncStorage.setItem(name, value);
+  },
+  removeItem: async (name: string): Promise<void> => {
+    if (Platform.OS === 'web') {
+      try {
+        localStorage.removeItem(name);
+      } catch {
+        console.error('Failed to remove from localStorage');
+      }
+      return;
+    }
+    await AsyncStorage.removeItem(name);
+  },
+};
+
+export const useAuthStore = create<AuthState>()(
+  persist(
+    (set, get) => ({
       token: null,
       user: null,
-      isAuthenticated: false
-    });
-  },
-  
-  loadStoredAuth: async () => {
-    try {
-      const token = await AsyncStorage.getItem('auth-token');
-      const userStr = await AsyncStorage.getItem('auth-user');
+      isAuthenticated: false,
+      isLoading: true,
+      _hasHydrated: false,
       
-      if (token && userStr) {
-        const user = JSON.parse(userStr) as User;
+      setAuth: (token: string, user: User) => {
         set({
           token,
           user,
           isAuthenticated: true,
-          isLoading: false
+          isLoading: false,
         });
-      } else {
-        set({ isLoading: false });
-      }
-    } catch (e) {
-      console.error('Failed to load auth:', e);
-      set({ isLoading: false });
+      },
+      
+      logout: () => {
+        set({
+          token: null,
+          user: null,
+          isAuthenticated: false,
+        });
+      },
+      
+      setHasHydrated: (state: boolean) => {
+        set({ _hasHydrated: state, isLoading: !state });
+      },
+    }),
+    {
+      name: 'auth-storage',
+      storage: createJSONStorage(() => storage),
+      partialize: (state) => ({
+        token: state.token,
+        user: state.user,
+        isAuthenticated: state.isAuthenticated,
+      }),
+      onRehydrateStorage: () => (state) => {
+        state?.setHasHydrated(true);
+      },
     }
-  }
-}));
+  )
+);
