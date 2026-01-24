@@ -9,6 +9,7 @@ import {
   Modal,
   Alert,
   FlatList,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,7 +18,9 @@ import { Button } from '../../src/components/Button';
 import { Input } from '../../src/components/Input';
 import { useTranslation } from '../../src/utils/useTranslation';
 import { useAuthStore } from '../../src/store/authStore';
+import { useSettingsStore } from '../../src/store/settingsStore';
 import api from '../../src/utils/api';
+import { printBill, shareBillAsPDF } from '../../src/utils/billGenerator';
 
 interface Product {
   id: string;
