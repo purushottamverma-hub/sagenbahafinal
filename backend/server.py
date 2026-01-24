@@ -1281,7 +1281,12 @@ async def create_farmer_purchase(purchase: FarmerPurchaseCreate, current_user: d
 async def get_farmer_purchases(current_user: dict = Depends(get_current_user)):
     """Get all farmer purchases"""
     purchases = await db.farmer_purchases.find().sort("created_at", -1).to_list(1000)
-    return purchases
+    # Convert MongoDB documents to dict without _id
+    result = []
+    for p in purchases:
+        p.pop('_id', None)
+        result.append(p)
+    return result
 
 @api_router.post("/farmer-purchases")
 async def create_farmer_purchase_alt(purchase: FarmerPurchaseCreate, current_user: dict = Depends(get_current_user)):
@@ -1297,6 +1302,8 @@ async def create_farmer_purchase_alt(purchase: FarmerPurchaseCreate, current_use
     receipt_number = await generate_receipt_number()
     total = purchase.quantity * purchase.rate
     
+    payment_mode = "cash" if purchase.payment_status == "paid" else "credit"
+    
     purchase_obj = FarmerPurchase(
         farmer_id=purchase.farmer_id,
         farmer_name=farmer["name"],
@@ -1305,10 +1312,10 @@ async def create_farmer_purchase_alt(purchase: FarmerPurchaseCreate, current_use
         quantity=purchase.quantity,
         rate=purchase.rate,
         total_amount=total,
-        payment_mode=purchase.payment_mode,
-        cash_amount=total if purchase.payment_mode == "cash" else 0,
-        online_amount=total if purchase.payment_mode == "online" else 0,
-        credit_amount=total if purchase.payment_mode == "credit" else 0,
+        payment_mode=payment_mode,
+        payment_status=purchase.payment_status,
+        cash_amount=total if purchase.payment_status == "paid" else 0,
+        credit_amount=total if purchase.payment_status == "credit" else 0,
         receipt_number=receipt_number,
         created_by=current_user["id"]
     )
@@ -1326,7 +1333,11 @@ async def create_farmer_purchase_alt(purchase: FarmerPurchaseCreate, current_use
         }, "$set": {"updated_at": datetime.utcnow()}}
     )
     
-    return purchase_obj
+    return {
+        "message": "Purchase recorded successfully",
+        "receipt_number": receipt_number,
+        "total_amount": total
+    }
 
 @api_router.post("/farmers/payment")
 async def record_farmer_payment(payment: FarmerPaymentCreate, current_user: dict = Depends(require_admin)):
