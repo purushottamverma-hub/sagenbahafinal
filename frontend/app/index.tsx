@@ -14,8 +14,10 @@ export default function Index() {
         router.replace('/(auth)/login');
       } else if (user?.role === 'admin') {
         router.replace('/(admin)');
-      } else {
+      } else if (user?.role === 'agent') {
         router.replace('/(agent)');
+      } else if (user?.role === 'farmer') {
+        router.replace('/(farmer)');
       }
     }, 100);
 
