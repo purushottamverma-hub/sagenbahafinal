@@ -51,10 +51,12 @@ logger = logging.getLogger(__name__)
 class UserBase(BaseModel):
     username: str
     full_name: str
-    role: str = "agent"  # admin or agent
+    role: str = "farmer"  # admin, agent, or farmer
     outlet_id: Optional[str] = None
     mobile: Optional[str] = None
+    village: Optional[str] = None
     is_active: bool = True
+    status: str = "active"  # active, pending, rejected (for agent approval)
 
 class UserCreate(UserBase):
     password: str
@@ -71,6 +73,19 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+    full_name: str
+    role: str = "farmer"  # farmer or agent (admin can only be created by admin)
+    mobile: Optional[str] = None
+    village: Optional[str] = None
+
+class ApproveAgentRequest(BaseModel):
+    user_id: str
+    outlet_id: str
+    approved: bool = True
+
 class PasswordChangeRequest(BaseModel):
     old_password: str
     new_password: str
@@ -79,6 +94,25 @@ class Token(BaseModel):
     access_token: str
     token_type: str
     user: dict
+
+# Buy/Sell Request from Farmers
+class ProductRequestBase(BaseModel):
+    product_id: str
+    quantity: float
+    request_type: str  # buy or sell
+    preferred_rate: Optional[float] = None
+    notes: Optional[str] = None
+
+class ProductRequest(ProductRequestBase):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    farmer_id: str
+    farmer_name: Optional[str] = None
+    product_name: Optional[str] = None
+    status: str = "pending"  # pending, approved, rejected, completed
+    outlet_id: Optional[str] = None  # assigned outlet for processing
+    processed_by: Optional[str] = None
+    processed_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class OutletBase(BaseModel):
     name: str
