@@ -684,6 +684,30 @@ export default function SalesScreen() {
                   {language === 'hi' ? 'धन्यवाद!' : 'Thank you!'}
                 </Text>
               </Card>
+
+              {/* Print/Share Actions */}
+              <View style={styles.billActions}>
+                <TouchableOpacity
+                  style={[styles.billActionBtn, styles.printBtn]}
+                  onPress={handlePrintBill}
+                  disabled={isPrinting}
+                >
+                  <Ionicons name="print" size={22} color="#FFF" />
+                  <Text style={styles.billActionText}>
+                    {language === 'hi' ? 'प्रिंट करें' : 'Print'}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.billActionBtn, styles.shareBtn]}
+                  onPress={handleShareBill}
+                  disabled={isPrinting}
+                >
+                  <Ionicons name="share-social" size={22} color="#FFF" />
+                  <Text style={styles.billActionText}>
+                    {language === 'hi' ? 'PDF शेयर करें' : 'Share PDF'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </ScrollView>
           )}
         </SafeAreaView>
