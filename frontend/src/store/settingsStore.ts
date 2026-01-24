@@ -1,75 +1,60 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage, StateStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import { Language } from '../i18n/translations';
 
 interface SettingsState {
   language: Language;
-  _hasHydrated: boolean;
+  isLoaded: boolean;
   setLanguage: (lang: Language) => void;
-  setHasHydrated: (state: boolean) => void;
+  hydrate: () => Promise<void>;
 }
 
-// Custom storage adapter that works on both web and native
-const storage: StateStorage = {
-  getItem: async (name: string): Promise<string | null> => {
+// Storage key
+const SETTINGS_STORAGE_KEY = 'fpo-settings-storage';
+
+// Helper functions for storage
+const getStorage = async (): Promise<{ language: Language } | null> => {
+  try {
     if (Platform.OS === 'web') {
-      try {
-        return localStorage.getItem(name);
-      } catch {
-        return null;
-      }
+      const item = localStorage.getItem(SETTINGS_STORAGE_KEY);
+      return item ? JSON.parse(item) : null;
     }
-    return AsyncStorage.getItem(name);
-  },
-  setItem: async (name: string, value: string): Promise<void> => {
-    if (Platform.OS === 'web') {
-      try {
-        localStorage.setItem(name, value);
-      } catch {
-        console.error('Failed to save to localStorage');
-      }
-      return;
-    }
-    await AsyncStorage.setItem(name, value);
-  },
-  removeItem: async (name: string): Promise<void> => {
-    if (Platform.OS === 'web') {
-      try {
-        localStorage.removeItem(name);
-      } catch {
-        console.error('Failed to remove from localStorage');
-      }
-      return;
-    }
-    await AsyncStorage.removeItem(name);
-  },
+    const item = await AsyncStorage.getItem(SETTINGS_STORAGE_KEY);
+    return item ? JSON.parse(item) : null;
+  } catch {
+    return null;
+  }
 };
 
-export const useSettingsStore = create<SettingsState>()(
-  persist(
-    (set) => ({
-      language: 'hi', // Default to Hindi
-      _hasHydrated: false,
-      
-      setLanguage: (lang: Language) => {
-        set({ language: lang });
-      },
-      
-      setHasHydrated: (state: boolean) => {
-        set({ _hasHydrated: state });
-      },
-    }),
-    {
-      name: 'settings-storage',
-      storage: createJSONStorage(() => storage),
-      partialize: (state) => ({
-        language: state.language,
-      }),
-      onRehydrateStorage: () => (state) => {
-        state?.setHasHydrated(true);
-      },
+const setStorage = async (data: { language: Language }): Promise<void> => {
+  try {
+    const value = JSON.stringify(data);
+    if (Platform.OS === 'web') {
+      localStorage.setItem(SETTINGS_STORAGE_KEY, value);
+    } else {
+      await AsyncStorage.setItem(SETTINGS_STORAGE_KEY, value);
     }
-  )
-);
+  } catch (e) {
+    console.error('Failed to save settings:', e);
+  }
+};
+
+export const useSettingsStore = create<SettingsState>()((set, get) => ({
+  language: 'hi', // Default to Hindi
+  isLoaded: false,
+  
+  setLanguage: async (lang: Language) => {
+    set({ language: lang });
+    await setStorage({ language: lang });
+  },
+  
+  hydrate: async () => {
+    const stored = await getStorage();
+    if (stored && stored.language) {
+      set({ language: stored.language, isLoaded: true });
+    } else {
+      set({ isLoaded: true });
+    }
+  },
+}));
