@@ -68,6 +68,7 @@ interface Sale {
 export default function SalesScreen() {
   const { t, language } = useTranslation();
   const { user } = useAuthStore();
+  const settingsLanguage = useSettingsStore((state) => state.language);
   const [sales, setSales] = useState<Sale[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [outlets, setOutlets] = useState<Outlet[]>([]);
@@ -77,6 +78,7 @@ export default function SalesScreen() {
   const [showNewSale, setShowNewSale] = useState(false);
   const [showBillDetails, setShowBillDetails] = useState(false);
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
+  const [isPrinting, setIsPrinting] = useState(false);
 
   // New sale state
   const [selectedOutlet, setSelectedOutlet] = useState<string>('');
