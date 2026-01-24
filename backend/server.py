@@ -1,4 +1,6 @@
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -6,10 +8,13 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional, Dict, Any
 import uuid
-from datetime import datetime
-
+from datetime import datetime, timedelta
+import jwt
+from passlib.context import CryptContext
+import io
+from openpyxl import Workbook
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -17,40 +22,1360 @@ load_dotenv(ROOT_DIR / '.env')
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+db = client[os.environ.get('DB_NAME', 'fpo_database')]
 
-# Create the main app without a prefix
-app = FastAPI()
+# Create the main app
+app = FastAPI(title="FPO Management System API")
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
+# JWT Configuration
+SECRET_KEY = os.environ.get('JWT_SECRET', 'fpo-secret-key-change-in-production')
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_DAYS = 30
 
-# Define Models
-class StatusCheck(BaseModel):
+# Password hashing
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+security = HTTPBearer()
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# ===================== MODELS =====================
+
+class UserBase(BaseModel):
+    username: str
+    full_name: str
+    role: str = "agent"  # admin or agent
+    outlet_id: Optional[str] = None
+    mobile: Optional[str] = None
+    is_active: bool = True
+
+class UserCreate(UserBase):
+    password: str
+
+class User(UserBase):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-class StatusCheckCreate(BaseModel):
-    client_name: str
+class UserInDB(User):
+    hashed_password: str
 
-# Add your routes to the router instead of directly to app
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class PasswordChangeRequest(BaseModel):
+    old_password: str
+    new_password: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    user: dict
+
+class OutletBase(BaseModel):
+    name: str
+    address: str
+    contact_person: str
+    mobile: Optional[str] = None
+    is_central: bool = False
+    is_active: bool = True
+
+class OutletCreate(OutletBase):
+    pass
+
+class Outlet(OutletBase):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+class ProductBase(BaseModel):
+    name: str
+    name_hi: Optional[str] = None  # Hindi name
+    unit: str = "kg"  # kg, litre, piece, packet
+    category: str = "input"  # input (seeds, bio-inputs) or output (produce)
+    description: Optional[str] = None
+    is_active: bool = True
+
+class ProductCreate(ProductBase):
+    pass
+
+class Product(ProductBase):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+class StockBase(BaseModel):
+    product_id: str
+    outlet_id: str
+    quantity: float = 0
+    opening_stock: float = 0
+    stock_received: float = 0
+    stock_sold: float = 0
+    stock_damaged: float = 0
+
+class Stock(StockBase):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+class StockMovement(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    product_id: str
+    from_outlet_id: Optional[str] = None  # None for new stock entry
+    to_outlet_id: Optional[str] = None  # None for damage/discard
+    quantity: float
+    movement_type: str  # allocation, damage, adjustment, purchase, sale
+    reason: Optional[str] = None
+    created_by: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class StockAllocationRequest(BaseModel):
+    product_id: str
+    from_outlet_id: str
+    to_outlet_id: str
+    quantity: float
+
+class StockDamageRequest(BaseModel):
+    product_id: str
+    outlet_id: str
+    quantity: float
+    reason: str  # Mandatory reason
+
+class StockAddRequest(BaseModel):
+    product_id: str
+    outlet_id: str
+    quantity: float
+
+class CustomerBase(BaseModel):
+    name: str
+    mobile: Optional[str] = None
+    address: Optional[str] = None
+    village: Optional[str] = None
+    is_active: bool = True
+
+class CustomerCreate(CustomerBase):
+    pass
+
+class Customer(CustomerBase):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    total_purchases: float = 0
+    total_credit: float = 0
+    total_paid: float = 0
+    outstanding_balance: float = 0
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+class SaleItemBase(BaseModel):
+    product_id: str
+    product_name: str
+    quantity: float
+    rate: float
+    amount: float
+
+class SaleBase(BaseModel):
+    outlet_id: str
+    customer_id: Optional[str] = None
+    customer_name: Optional[str] = None
+    items: List[SaleItemBase]
+    subtotal: float
+    discount: float = 0
+    total_amount: float
+    payment_mode: str  # cash, online, credit, partial
+    cash_amount: float = 0
+    online_amount: float = 0
+    credit_amount: float = 0
+    notes: Optional[str] = None
+
+class SaleCreate(SaleBase):
+    pass
+
+class Sale(SaleBase):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    bill_number: str = ""
+    created_by: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    synced: bool = True
+
+class FarmerBase(BaseModel):
+    name: str
+    village: str
+    mobile: Optional[str] = None
+    is_member: bool = False
+    is_active: bool = True
+
+class FarmerCreate(FarmerBase):
+    pass
+
+class Farmer(FarmerBase):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    total_supplied: float = 0
+    total_payable: float = 0
+    total_paid: float = 0
+    outstanding_dues: float = 0
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+class FarmerPurchaseBase(BaseModel):
+    farmer_id: str
+    farmer_name: Optional[str] = None
+    product_id: str
+    product_name: Optional[str] = None
+    quantity: float
+    rate: float
+    total_amount: float
+    payment_mode: str  # cash, online, credit, partial
+    cash_amount: float = 0
+    online_amount: float = 0
+    credit_amount: float = 0
+    notes: Optional[str] = None
+
+class FarmerPurchaseCreate(FarmerPurchaseBase):
+    pass
+
+class FarmerPurchase(FarmerPurchaseBase):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    receipt_number: str = ""
+    created_by: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class CustomerPayment(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    customer_id: str
+    amount: float
+    payment_mode: str  # cash, online
+    notes: Optional[str] = None
+    created_by: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class FarmerPayment(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    farmer_id: str
+    amount: float
+    payment_mode: str  # cash, online
+    notes: Optional[str] = None
+    created_by: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class CustomerPaymentCreate(BaseModel):
+    customer_id: str
+    amount: float
+    payment_mode: str
+    notes: Optional[str] = None
+
+class FarmerPaymentCreate(BaseModel):
+    farmer_id: str
+    amount: float
+    payment_mode: str
+    notes: Optional[str] = None
+
+# ===================== HELPER FUNCTIONS =====================
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password: str) -> str:
+    return pwd_context.hash(password)
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    try:
+        token = credentials.credentials
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        
+        user = await db.users.find_one({"username": username})
+        if user is None:
+            raise HTTPException(status_code=401, detail="User not found")
+        
+        return {
+            "id": user["id"],
+            "username": user["username"],
+            "full_name": user["full_name"],
+            "role": user["role"],
+            "outlet_id": user.get("outlet_id"),
+            "is_active": user.get("is_active", True)
+        }
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+async def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return current_user
+
+async def generate_bill_number() -> str:
+    today = datetime.utcnow()
+    prefix = today.strftime("BILL%Y%m%d")
+    count = await db.sales.count_documents({
+        "created_at": {
+            "$gte": datetime(today.year, today.month, today.day),
+            "$lt": datetime(today.year, today.month, today.day) + timedelta(days=1)
+        }
+    })
+    return f"{prefix}{str(count + 1).zfill(4)}"
+
+async def generate_receipt_number() -> str:
+    today = datetime.utcnow()
+    prefix = today.strftime("RCP%Y%m%d")
+    count = await db.farmer_purchases.count_documents({
+        "created_at": {
+            "$gte": datetime(today.year, today.month, today.day),
+            "$lt": datetime(today.year, today.month, today.day) + timedelta(days=1)
+        }
+    })
+    return f"{prefix}{str(count + 1).zfill(4)}"
+
+# ===================== AUTHENTICATION ROUTES =====================
+
+@api_router.post("/auth/login", response_model=Token)
+async def login(request: LoginRequest):
+    user = await db.users.find_one({"username": request.username})
+    if not user or not verify_password(request.password, user["hashed_password"]):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    
+    if not user.get("is_active", True):
+        raise HTTPException(status_code=401, detail="Account is disabled")
+    
+    access_token = create_access_token(data={"sub": user["username"]})
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
+            "id": user["id"],
+            "username": user["username"],
+            "full_name": user["full_name"],
+            "role": user["role"],
+            "outlet_id": user.get("outlet_id")
+        }
+    }
+
+@api_router.post("/auth/change-password")
+async def change_password(request: PasswordChangeRequest, current_user: dict = Depends(get_current_user)):
+    user = await db.users.find_one({"id": current_user["id"]})
+    if not verify_password(request.old_password, user["hashed_password"]):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    
+    new_hash = get_password_hash(request.new_password)
+    await db.users.update_one(
+        {"id": current_user["id"]},
+        {"$set": {"hashed_password": new_hash, "updated_at": datetime.utcnow()}}
+    )
+    return {"message": "Password changed successfully"}
+
+@api_router.get("/auth/me")
+async def get_me(current_user: dict = Depends(get_current_user)):
+    return current_user
+
+# ===================== USER MANAGEMENT ROUTES (Admin Only) =====================
+
+@api_router.post("/users", response_model=User)
+async def create_user(user: UserCreate, current_user: dict = Depends(require_admin)):
+    existing = await db.users.find_one({"username": user.username})
+    if existing:
+        raise HTTPException(status_code=400, detail="Username already exists")
+    
+    user_dict = user.dict()
+    password = user_dict.pop("password")
+    user_obj = UserInDB(**user_dict, hashed_password=get_password_hash(password))
+    await db.users.insert_one(user_obj.dict())
+    return User(**user_dict, id=user_obj.id, created_at=user_obj.created_at, updated_at=user_obj.updated_at)
+
+@api_router.get("/users", response_model=List[User])
+async def get_users(current_user: dict = Depends(require_admin)):
+    users = await db.users.find().to_list(1000)
+    return [User(
+        id=u["id"],
+        username=u["username"],
+        full_name=u["full_name"],
+        role=u["role"],
+        outlet_id=u.get("outlet_id"),
+        mobile=u.get("mobile"),
+        is_active=u.get("is_active", True),
+        created_at=u.get("created_at", datetime.utcnow()),
+        updated_at=u.get("updated_at", datetime.utcnow())
+    ) for u in users]
+
+@api_router.put("/users/{user_id}")
+async def update_user(user_id: str, updates: dict, current_user: dict = Depends(require_admin)):
+    # Cannot change username
+    if "username" in updates:
+        del updates["username"]
+    
+    if "password" in updates:
+        updates["hashed_password"] = get_password_hash(updates.pop("password"))
+    
+    updates["updated_at"] = datetime.utcnow()
+    result = await db.users.update_one({"id": user_id}, {"$set": updates})
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"message": "User updated successfully"}
+
+@api_router.delete("/users/{user_id}")
+async def delete_user(user_id: str, current_user: dict = Depends(require_admin)):
+    # Soft delete - just deactivate
+    result = await db.users.update_one(
+        {"id": user_id},
+        {"$set": {"is_active": False, "updated_at": datetime.utcnow()}}
+    )
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"message": "User deactivated successfully"}
+
+# ===================== OUTLET ROUTES =====================
+
+@api_router.post("/outlets", response_model=Outlet)
+async def create_outlet(outlet: OutletCreate, current_user: dict = Depends(require_admin)):
+    outlet_obj = Outlet(**outlet.dict())
+    await db.outlets.insert_one(outlet_obj.dict())
+    return outlet_obj
+
+@api_router.get("/outlets", response_model=List[Outlet])
+async def get_outlets(current_user: dict = Depends(get_current_user)):
+    query = {"is_active": True}
+    if current_user["role"] == "agent" and current_user.get("outlet_id"):
+        query["id"] = current_user["outlet_id"]
+    outlets = await db.outlets.find(query).to_list(1000)
+    return [Outlet(**o) for o in outlets]
+
+@api_router.get("/outlets/{outlet_id}", response_model=Outlet)
+async def get_outlet(outlet_id: str, current_user: dict = Depends(get_current_user)):
+    outlet = await db.outlets.find_one({"id": outlet_id})
+    if not outlet:
+        raise HTTPException(status_code=404, detail="Outlet not found")
+    return Outlet(**outlet)
+
+@api_router.put("/outlets/{outlet_id}")
+async def update_outlet(outlet_id: str, updates: dict, current_user: dict = Depends(require_admin)):
+    updates["updated_at"] = datetime.utcnow()
+    result = await db.outlets.update_one({"id": outlet_id}, {"$set": updates})
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Outlet not found")
+    return {"message": "Outlet updated successfully"}
+
+@api_router.delete("/outlets/{outlet_id}")
+async def delete_outlet(outlet_id: str, current_user: dict = Depends(require_admin)):
+    result = await db.outlets.update_one(
+        {"id": outlet_id},
+        {"$set": {"is_active": False, "updated_at": datetime.utcnow()}}
+    )
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Outlet not found")
+    return {"message": "Outlet deactivated successfully"}
+
+# ===================== PRODUCT ROUTES =====================
+
+@api_router.post("/products", response_model=Product)
+async def create_product(product: ProductCreate, current_user: dict = Depends(require_admin)):
+    product_obj = Product(**product.dict())
+    await db.products.insert_one(product_obj.dict())
+    return product_obj
+
+@api_router.get("/products", response_model=List[Product])
+async def get_products(category: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    query = {"is_active": True}
+    if category:
+        query["category"] = category
+    products = await db.products.find(query).to_list(1000)
+    return [Product(**p) for p in products]
+
+@api_router.get("/products/{product_id}", response_model=Product)
+async def get_product(product_id: str, current_user: dict = Depends(get_current_user)):
+    product = await db.products.find_one({"id": product_id})
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return Product(**product)
+
+@api_router.put("/products/{product_id}")
+async def update_product(product_id: str, updates: dict, current_user: dict = Depends(require_admin)):
+    updates["updated_at"] = datetime.utcnow()
+    result = await db.products.update_one({"id": product_id}, {"$set": updates})
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return {"message": "Product updated successfully"}
+
+@api_router.delete("/products/{product_id}")
+async def delete_product(product_id: str, current_user: dict = Depends(require_admin)):
+    result = await db.products.update_one(
+        {"id": product_id},
+        {"$set": {"is_active": False, "updated_at": datetime.utcnow()}}
+    )
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return {"message": "Product deactivated successfully"}
+
+# ===================== STOCK ROUTES =====================
+
+@api_router.get("/stock")
+async def get_stock(outlet_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    query = {}
+    if current_user["role"] == "agent" and current_user.get("outlet_id"):
+        query["outlet_id"] = current_user["outlet_id"]
+    elif outlet_id:
+        query["outlet_id"] = outlet_id
+    
+    stocks = await db.stock.find(query).to_list(1000)
+    
+    # Enrich with product and outlet info
+    result = []
+    for s in stocks:
+        product = await db.products.find_one({"id": s["product_id"]})
+        outlet = await db.outlets.find_one({"id": s["outlet_id"]})
+        result.append({
+            **s,
+            "product_name": product["name"] if product else "Unknown",
+            "product_unit": product["unit"] if product else "",
+            "outlet_name": outlet["name"] if outlet else "Unknown"
+        })
+    return result
+
+@api_router.get("/stock/consolidated")
+async def get_consolidated_stock(current_user: dict = Depends(require_admin)):
+    """Get consolidated stock across all outlets for bulk orders"""
+    pipeline = [
+        {"$group": {
+            "_id": "$product_id",
+            "total_quantity": {"$sum": "$quantity"},
+            "total_opening": {"$sum": "$opening_stock"},
+            "total_received": {"$sum": "$stock_received"},
+            "total_sold": {"$sum": "$stock_sold"},
+            "total_damaged": {"$sum": "$stock_damaged"}
+        }}
+    ]
+    results = await db.stock.aggregate(pipeline).to_list(1000)
+    
+    # Enrich with product info
+    consolidated = []
+    for r in results:
+        product = await db.products.find_one({"id": r["_id"]})
+        if product:
+            consolidated.append({
+                "product_id": r["_id"],
+                "product_name": product["name"],
+                "product_unit": product["unit"],
+                "total_quantity": r["total_quantity"],
+                "total_opening": r["total_opening"],
+                "total_received": r["total_received"],
+                "total_sold": r["total_sold"],
+                "total_damaged": r["total_damaged"]
+            })
+    return consolidated
+
+@api_router.post("/stock/add")
+async def add_stock(request: StockAddRequest, current_user: dict = Depends(get_current_user)):
+    """Add stock to an outlet"""
+    # Check if stock record exists
+    existing = await db.stock.find_one({
+        "product_id": request.product_id,
+        "outlet_id": request.outlet_id
+    })
+    
+    if existing:
+        await db.stock.update_one(
+            {"id": existing["id"]},
+            {"$inc": {
+                "quantity": request.quantity,
+                "stock_received": request.quantity
+            }, "$set": {"updated_at": datetime.utcnow()}}
+        )
+    else:
+        stock = Stock(
+            product_id=request.product_id,
+            outlet_id=request.outlet_id,
+            quantity=request.quantity,
+            opening_stock=request.quantity,
+            stock_received=request.quantity
+        )
+        await db.stock.insert_one(stock.dict())
+    
+    # Log movement
+    movement = StockMovement(
+        product_id=request.product_id,
+        to_outlet_id=request.outlet_id,
+        quantity=request.quantity,
+        movement_type="addition",
+        created_by=current_user["id"]
+    )
+    await db.stock_movements.insert_one(movement.dict())
+    
+    return {"message": "Stock added successfully"}
+
+@api_router.post("/stock/allocate")
+async def allocate_stock(request: StockAllocationRequest, current_user: dict = Depends(require_admin)):
+    """Allocate stock from one outlet to another"""
+    # Check source stock
+    source = await db.stock.find_one({
+        "product_id": request.product_id,
+        "outlet_id": request.from_outlet_id
+    })
+    
+    if not source or source["quantity"] < request.quantity:
+        raise HTTPException(status_code=400, detail="Insufficient stock at source outlet")
+    
+    # Deduct from source
+    await db.stock.update_one(
+        {"id": source["id"]},
+        {"$inc": {"quantity": -request.quantity}, "$set": {"updated_at": datetime.utcnow()}}
+    )
+    
+    # Add to destination
+    dest = await db.stock.find_one({
+        "product_id": request.product_id,
+        "outlet_id": request.to_outlet_id
+    })
+    
+    if dest:
+        await db.stock.update_one(
+            {"id": dest["id"]},
+            {"$inc": {
+                "quantity": request.quantity,
+                "stock_received": request.quantity
+            }, "$set": {"updated_at": datetime.utcnow()}}
+        )
+    else:
+        stock = Stock(
+            product_id=request.product_id,
+            outlet_id=request.to_outlet_id,
+            quantity=request.quantity,
+            stock_received=request.quantity
+        )
+        await db.stock.insert_one(stock.dict())
+    
+    # Log movement
+    movement = StockMovement(
+        product_id=request.product_id,
+        from_outlet_id=request.from_outlet_id,
+        to_outlet_id=request.to_outlet_id,
+        quantity=request.quantity,
+        movement_type="allocation",
+        created_by=current_user["id"]
+    )
+    await db.stock_movements.insert_one(movement.dict())
+    
+    return {"message": "Stock allocated successfully"}
+
+@api_router.post("/stock/damage")
+async def report_damage(request: StockDamageRequest, current_user: dict = Depends(get_current_user)):
+    """Report damaged/discarded stock with mandatory reason"""
+    if not request.reason or len(request.reason.strip()) < 5:
+        raise HTTPException(status_code=400, detail="A valid reason is required for damaged stock")
+    
+    # Check stock
+    stock = await db.stock.find_one({
+        "product_id": request.product_id,
+        "outlet_id": request.outlet_id
+    })
+    
+    if not stock or stock["quantity"] < request.quantity:
+        raise HTTPException(status_code=400, detail="Insufficient stock")
+    
+    # Update stock
+    await db.stock.update_one(
+        {"id": stock["id"]},
+        {"$inc": {
+            "quantity": -request.quantity,
+            "stock_damaged": request.quantity
+        }, "$set": {"updated_at": datetime.utcnow()}}
+    )
+    
+    # Log movement
+    movement = StockMovement(
+        product_id=request.product_id,
+        from_outlet_id=request.outlet_id,
+        quantity=request.quantity,
+        movement_type="damage",
+        reason=request.reason,
+        created_by=current_user["id"]
+    )
+    await db.stock_movements.insert_one(movement.dict())
+    
+    return {"message": "Damage reported successfully"}
+
+# ===================== CUSTOMER ROUTES =====================
+
+@api_router.post("/customers", response_model=Customer)
+async def create_customer(customer: CustomerCreate, current_user: dict = Depends(get_current_user)):
+    customer_obj = Customer(**customer.dict())
+    await db.customers.insert_one(customer_obj.dict())
+    return customer_obj
+
+@api_router.get("/customers", response_model=List[Customer])
+async def get_customers(current_user: dict = Depends(get_current_user)):
+    customers = await db.customers.find({"is_active": True}).to_list(1000)
+    return [Customer(**c) for c in customers]
+
+@api_router.get("/customers/{customer_id}", response_model=Customer)
+async def get_customer(customer_id: str, current_user: dict = Depends(get_current_user)):
+    customer = await db.customers.find_one({"id": customer_id})
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return Customer(**customer)
+
+@api_router.put("/customers/{customer_id}")
+async def update_customer(customer_id: str, updates: dict, current_user: dict = Depends(get_current_user)):
+    updates["updated_at"] = datetime.utcnow()
+    result = await db.customers.update_one({"id": customer_id}, {"$set": updates})
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return {"message": "Customer updated successfully"}
+
+@api_router.get("/customers/{customer_id}/ledger")
+async def get_customer_ledger(customer_id: str, current_user: dict = Depends(get_current_user)):
+    """Get customer ledger with all transactions"""
+    # Only admin can see full ledger
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required for ledger")
+    
+    customer = await db.customers.find_one({"id": customer_id})
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    
+    sales = await db.sales.find({"customer_id": customer_id}).sort("created_at", -1).to_list(1000)
+    payments = await db.customer_payments.find({"customer_id": customer_id}).sort("created_at", -1).to_list(1000)
+    
+    return {
+        "customer": Customer(**customer),
+        "sales": sales,
+        "payments": payments
+    }
+
+@api_router.post("/customers/payment")
+async def record_customer_payment(payment: CustomerPaymentCreate, current_user: dict = Depends(get_current_user)):
+    """Record a payment from customer"""
+    customer = await db.customers.find_one({"id": payment.customer_id})
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    
+    payment_obj = CustomerPayment(
+        customer_id=payment.customer_id,
+        amount=payment.amount,
+        payment_mode=payment.payment_mode,
+        notes=payment.notes,
+        created_by=current_user["id"]
+    )
+    await db.customer_payments.insert_one(payment_obj.dict())
+    
+    # Update customer balance
+    await db.customers.update_one(
+        {"id": payment.customer_id},
+        {"$inc": {
+            "total_paid": payment.amount,
+            "outstanding_balance": -payment.amount
+        }, "$set": {"updated_at": datetime.utcnow()}}
+    )
+    
+    return {"message": "Payment recorded successfully"}
+
+# ===================== SALES ROUTES =====================
+
+@api_router.post("/sales", response_model=Sale)
+async def create_sale(sale: SaleCreate, current_user: dict = Depends(get_current_user)):
+    """Create a new sale and generate bill"""
+    # Verify outlet access
+    if current_user["role"] == "agent" and current_user.get("outlet_id") != sale.outlet_id:
+        raise HTTPException(status_code=403, detail="You can only make sales at your assigned outlet")
+    
+    # Check stock availability for all items
+    for item in sale.items:
+        stock = await db.stock.find_one({
+            "product_id": item.product_id,
+            "outlet_id": sale.outlet_id
+        })
+        if not stock or stock["quantity"] < item.quantity:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Insufficient stock for {item.product_name}"
+            )
+    
+    # Generate bill number
+    bill_number = await generate_bill_number()
+    
+    # Create sale
+    sale_obj = Sale(
+        **sale.dict(),
+        bill_number=bill_number,
+        created_by=current_user["id"]
+    )
+    await db.sales.insert_one(sale_obj.dict())
+    
+    # Deduct stock for each item
+    for item in sale.items:
+        await db.stock.update_one(
+            {"product_id": item.product_id, "outlet_id": sale.outlet_id},
+            {"$inc": {
+                "quantity": -item.quantity,
+                "stock_sold": item.quantity
+            }, "$set": {"updated_at": datetime.utcnow()}}
+        )
+        
+        # Log movement
+        movement = StockMovement(
+            product_id=item.product_id,
+            from_outlet_id=sale.outlet_id,
+            quantity=item.quantity,
+            movement_type="sale",
+            created_by=current_user["id"]
+        )
+        await db.stock_movements.insert_one(movement.dict())
+    
+    # Update customer ledger if credit involved
+    if sale.customer_id and sale.credit_amount > 0:
+        await db.customers.update_one(
+            {"id": sale.customer_id},
+            {"$inc": {
+                "total_purchases": sale.total_amount,
+                "total_credit": sale.credit_amount,
+                "total_paid": sale.cash_amount + sale.online_amount,
+                "outstanding_balance": sale.credit_amount
+            }, "$set": {"updated_at": datetime.utcnow()}}
+        )
+    elif sale.customer_id:
+        await db.customers.update_one(
+            {"id": sale.customer_id},
+            {"$inc": {
+                "total_purchases": sale.total_amount,
+                "total_paid": sale.total_amount
+            }, "$set": {"updated_at": datetime.utcnow()}}
+        )
+    
+    return sale_obj
+
+@api_router.get("/sales")
+async def get_sales(
+    outlet_id: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get sales with optional filters"""
+    query = {}
+    
+    if current_user["role"] == "agent" and current_user.get("outlet_id"):
+        query["outlet_id"] = current_user["outlet_id"]
+    elif outlet_id:
+        query["outlet_id"] = outlet_id
+    
+    if start_date:
+        query["created_at"] = {"$gte": datetime.fromisoformat(start_date)}
+    if end_date:
+        if "created_at" in query:
+            query["created_at"]["$lte"] = datetime.fromisoformat(end_date) + timedelta(days=1)
+        else:
+            query["created_at"] = {"$lte": datetime.fromisoformat(end_date) + timedelta(days=1)}
+    
+    sales = await db.sales.find(query).sort("created_at", -1).to_list(1000)
+    
+    # Enrich with outlet info
+    for sale in sales:
+        outlet = await db.outlets.find_one({"id": sale["outlet_id"]})
+        sale["outlet_name"] = outlet["name"] if outlet else "Unknown"
+    
+    return sales
+
+@api_router.get("/sales/{sale_id}")
+async def get_sale(sale_id: str, current_user: dict = Depends(get_current_user)):
+    sale = await db.sales.find_one({"id": sale_id})
+    if not sale:
+        raise HTTPException(status_code=404, detail="Sale not found")
+    
+    outlet = await db.outlets.find_one({"id": sale["outlet_id"]})
+    sale["outlet_name"] = outlet["name"] if outlet else "Unknown"
+    sale["outlet_address"] = outlet["address"] if outlet else ""
+    
+    return sale
+
+# ===================== FARMER ROUTES =====================
+
+@api_router.post("/farmers", response_model=Farmer)
+async def create_farmer(farmer: FarmerCreate, current_user: dict = Depends(get_current_user)):
+    farmer_obj = Farmer(**farmer.dict())
+    await db.farmers.insert_one(farmer_obj.dict())
+    return farmer_obj
+
+@api_router.get("/farmers", response_model=List[Farmer])
+async def get_farmers(current_user: dict = Depends(get_current_user)):
+    farmers = await db.farmers.find({"is_active": True}).to_list(1000)
+    return [Farmer(**f) for f in farmers]
+
+@api_router.get("/farmers/{farmer_id}", response_model=Farmer)
+async def get_farmer(farmer_id: str, current_user: dict = Depends(get_current_user)):
+    farmer = await db.farmers.find_one({"id": farmer_id})
+    if not farmer:
+        raise HTTPException(status_code=404, detail="Farmer not found")
+    return Farmer(**farmer)
+
+@api_router.put("/farmers/{farmer_id}")
+async def update_farmer(farmer_id: str, updates: dict, current_user: dict = Depends(get_current_user)):
+    updates["updated_at"] = datetime.utcnow()
+    result = await db.farmers.update_one({"id": farmer_id}, {"$set": updates})
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Farmer not found")
+    return {"message": "Farmer updated successfully"}
+
+@api_router.get("/farmers/{farmer_id}/ledger")
+async def get_farmer_ledger(farmer_id: str, current_user: dict = Depends(require_admin)):
+    """Get farmer ledger with all transactions"""
+    farmer = await db.farmers.find_one({"id": farmer_id})
+    if not farmer:
+        raise HTTPException(status_code=404, detail="Farmer not found")
+    
+    purchases = await db.farmer_purchases.find({"farmer_id": farmer_id}).sort("created_at", -1).to_list(1000)
+    payments = await db.farmer_payments.find({"farmer_id": farmer_id}).sort("created_at", -1).to_list(1000)
+    
+    return {
+        "farmer": Farmer(**farmer),
+        "purchases": purchases,
+        "payments": payments
+    }
+
+@api_router.post("/farmers/purchase", response_model=FarmerPurchase)
+async def create_farmer_purchase(purchase: FarmerPurchaseCreate, current_user: dict = Depends(require_admin)):
+    """Record produce purchase from farmer"""
+    farmer = await db.farmers.find_one({"id": purchase.farmer_id})
+    if not farmer:
+        raise HTTPException(status_code=404, detail="Farmer not found")
+    
+    product = await db.products.find_one({"id": purchase.product_id})
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    receipt_number = await generate_receipt_number()
+    
+    purchase_obj = FarmerPurchase(
+        **purchase.dict(),
+        farmer_name=farmer["name"],
+        product_name=product["name"],
+        receipt_number=receipt_number,
+        created_by=current_user["id"]
+    )
+    await db.farmer_purchases.insert_one(purchase_obj.dict())
+    
+    # Update farmer ledger
+    await db.farmers.update_one(
+        {"id": purchase.farmer_id},
+        {"$inc": {
+            "total_supplied": purchase.quantity,
+            "total_payable": purchase.total_amount,
+            "total_paid": purchase.cash_amount + purchase.online_amount,
+            "outstanding_dues": purchase.credit_amount
+        }, "$set": {"updated_at": datetime.utcnow()}}
+    )
+    
+    # Add to central stock (find or create central outlet stock)
+    central_outlet = await db.outlets.find_one({"is_central": True})
+    if central_outlet:
+        existing_stock = await db.stock.find_one({
+            "product_id": purchase.product_id,
+            "outlet_id": central_outlet["id"]
+        })
+        
+        if existing_stock:
+            await db.stock.update_one(
+                {"id": existing_stock["id"]},
+                {"$inc": {
+                    "quantity": purchase.quantity,
+                    "stock_received": purchase.quantity
+                }, "$set": {"updated_at": datetime.utcnow()}}
+            )
+        else:
+            stock = Stock(
+                product_id=purchase.product_id,
+                outlet_id=central_outlet["id"],
+                quantity=purchase.quantity,
+                stock_received=purchase.quantity
+            )
+            await db.stock.insert_one(stock.dict())
+        
+        # Log movement
+        movement = StockMovement(
+            product_id=purchase.product_id,
+            to_outlet_id=central_outlet["id"],
+            quantity=purchase.quantity,
+            movement_type="purchase",
+            created_by=current_user["id"]
+        )
+        await db.stock_movements.insert_one(movement.dict())
+    
+    return purchase_obj
+
+@api_router.post("/farmers/payment")
+async def record_farmer_payment(payment: FarmerPaymentCreate, current_user: dict = Depends(require_admin)):
+    """Record payment to farmer"""
+    farmer = await db.farmers.find_one({"id": payment.farmer_id})
+    if not farmer:
+        raise HTTPException(status_code=404, detail="Farmer not found")
+    
+    payment_obj = FarmerPayment(
+        farmer_id=payment.farmer_id,
+        amount=payment.amount,
+        payment_mode=payment.payment_mode,
+        notes=payment.notes,
+        created_by=current_user["id"]
+    )
+    await db.farmer_payments.insert_one(payment_obj.dict())
+    
+    # Update farmer balance
+    await db.farmers.update_one(
+        {"id": payment.farmer_id},
+        {"$inc": {
+            "total_paid": payment.amount,
+            "outstanding_dues": -payment.amount
+        }, "$set": {"updated_at": datetime.utcnow()}}
+    )
+    
+    return {"message": "Payment recorded successfully"}
+
+# ===================== DASHBOARD & REPORTS =====================
+
+@api_router.get("/dashboard")
+async def get_dashboard(current_user: dict = Depends(get_current_user)):
+    """Get dashboard data"""
+    today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    month_start = today.replace(day=1)
+    
+    query = {}
+    if current_user["role"] == "agent" and current_user.get("outlet_id"):
+        query["outlet_id"] = current_user["outlet_id"]
+    
+    # Today's sales
+    today_query = {**query, "created_at": {"$gte": today}}
+    today_sales = await db.sales.find(today_query).to_list(1000)
+    today_total = sum(s.get("total_amount", 0) for s in today_sales)
+    today_cash = sum(s.get("cash_amount", 0) for s in today_sales)
+    today_credit = sum(s.get("credit_amount", 0) for s in today_sales)
+    
+    # Month's sales
+    month_query = {**query, "created_at": {"$gte": month_start}}
+    month_sales = await db.sales.find(month_query).to_list(1000)
+    month_total = sum(s.get("total_amount", 0) for s in month_sales)
+    month_cash = sum(s.get("cash_amount", 0) for s in month_sales)
+    month_credit = sum(s.get("credit_amount", 0) for s in month_sales)
+    
+    # Stock summary
+    stock_query = {}
+    if current_user["role"] == "agent" and current_user.get("outlet_id"):
+        stock_query["outlet_id"] = current_user["outlet_id"]
+    
+    stocks = await db.stock.find(stock_query).to_list(1000)
+    low_stock_items = [s for s in stocks if s.get("quantity", 0) < 10]
+    
+    # Counts
+    total_customers = await db.customers.count_documents({"is_active": True})
+    total_farmers = await db.farmers.count_documents({"is_active": True})
+    total_products = await db.products.count_documents({"is_active": True})
+    total_outlets = await db.outlets.count_documents({"is_active": True})
+    
+    # Outstanding balances
+    customers = await db.customers.find({"outstanding_balance": {"$gt": 0}}).to_list(1000)
+    total_customer_outstanding = sum(c.get("outstanding_balance", 0) for c in customers)
+    
+    farmers = await db.farmers.find({"outstanding_dues": {"$gt": 0}}).to_list(1000)
+    total_farmer_dues = sum(f.get("outstanding_dues", 0) for f in farmers)
+    
+    return {
+        "today": {
+            "sales_count": len(today_sales),
+            "total": today_total,
+            "cash": today_cash,
+            "credit": today_credit,
+            "online": today_total - today_cash - today_credit
+        },
+        "month": {
+            "sales_count": len(month_sales),
+            "total": month_total,
+            "cash": month_cash,
+            "credit": month_credit,
+            "online": month_total - month_cash - month_credit
+        },
+        "counts": {
+            "customers": total_customers,
+            "farmers": total_farmers,
+            "products": total_products,
+            "outlets": total_outlets
+        },
+        "outstanding": {
+            "customer_dues": total_customer_outstanding,
+            "farmer_dues": total_farmer_dues
+        },
+        "low_stock_count": len(low_stock_items)
+    }
+
+@api_router.get("/reports/sales")
+async def get_sales_report(
+    outlet_id: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get sales report with filters"""
+    query = {}
+    
+    if current_user["role"] == "agent" and current_user.get("outlet_id"):
+        query["outlet_id"] = current_user["outlet_id"]
+    elif outlet_id:
+        query["outlet_id"] = outlet_id
+    
+    if start_date:
+        query["created_at"] = {"$gte": datetime.fromisoformat(start_date)}
+    if end_date:
+        if "created_at" in query:
+            query["created_at"]["$lte"] = datetime.fromisoformat(end_date) + timedelta(days=1)
+        else:
+            query["created_at"] = {"$lte": datetime.fromisoformat(end_date) + timedelta(days=1)}
+    
+    sales = await db.sales.find(query).sort("created_at", -1).to_list(1000)
+    
+    # Summary
+    total_amount = sum(s.get("total_amount", 0) for s in sales)
+    total_cash = sum(s.get("cash_amount", 0) for s in sales)
+    total_online = sum(s.get("online_amount", 0) for s in sales)
+    total_credit = sum(s.get("credit_amount", 0) for s in sales)
+    
+    # Enrich with outlet names
+    for sale in sales:
+        outlet = await db.outlets.find_one({"id": sale["outlet_id"]})
+        sale["outlet_name"] = outlet["name"] if outlet else "Unknown"
+    
+    return {
+        "sales": sales,
+        "summary": {
+            "count": len(sales),
+            "total_amount": total_amount,
+            "cash": total_cash,
+            "online": total_online,
+            "credit": total_credit
+        }
+    }
+
+@api_router.get("/reports/stock")
+async def get_stock_report(outlet_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Get stock report"""
+    query = {}
+    if current_user["role"] == "agent" and current_user.get("outlet_id"):
+        query["outlet_id"] = current_user["outlet_id"]
+    elif outlet_id:
+        query["outlet_id"] = outlet_id
+    
+    stocks = await db.stock.find(query).to_list(1000)
+    
+    result = []
+    for s in stocks:
+        product = await db.products.find_one({"id": s["product_id"]})
+        outlet = await db.outlets.find_one({"id": s["outlet_id"]})
+        result.append({
+            **s,
+            "product_name": product["name"] if product else "Unknown",
+            "product_unit": product["unit"] if product else "",
+            "outlet_name": outlet["name"] if outlet else "Unknown"
+        })
+    
+    return result
+
+@api_router.get("/reports/customers/export")
+async def export_customer_ledger(customer_id: Optional[str] = None, current_user: dict = Depends(require_admin)):
+    """Export customer ledger to Excel"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Customer Ledger"
+    
+    # Headers
+    headers = ["Customer Name", "Mobile", "Village", "Total Purchases", "Total Credit", "Total Paid", "Outstanding"]
+    ws.append(headers)
+    
+    query = {"is_active": True}
+    if customer_id:
+        query["id"] = customer_id
+    
+    customers = await db.customers.find(query).to_list(1000)
+    
+    for c in customers:
+        ws.append([
+            c.get("name", ""),
+            c.get("mobile", ""),
+            c.get("village", ""),
+            c.get("total_purchases", 0),
+            c.get("total_credit", 0),
+            c.get("total_paid", 0),
+            c.get("outstanding_balance", 0)
+        ])
+    
+    # Save to bytes
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=customer_ledger.xlsx"}
+    )
+
+@api_router.get("/reports/farmers/export")
+async def export_farmer_ledger(farmer_id: Optional[str] = None, current_user: dict = Depends(require_admin)):
+    """Export farmer ledger to Excel"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Farmer Ledger"
+    
+    # Headers
+    headers = ["Farmer Name", "Village", "Mobile", "Member", "Total Supplied", "Total Payable", "Total Paid", "Outstanding Dues"]
+    ws.append(headers)
+    
+    query = {"is_active": True}
+    if farmer_id:
+        query["id"] = farmer_id
+    
+    farmers = await db.farmers.find(query).to_list(1000)
+    
+    for f in farmers:
+        ws.append([
+            f.get("name", ""),
+            f.get("village", ""),
+            f.get("mobile", ""),
+            "Yes" if f.get("is_member") else "No",
+            f.get("total_supplied", 0),
+            f.get("total_payable", 0),
+            f.get("total_paid", 0),
+            f.get("outstanding_dues", 0)
+        ])
+    
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=farmer_ledger.xlsx"}
+    )
+
+@api_router.get("/reports/sales/export")
+async def export_sales_report(
+    outlet_id: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Export sales report to Excel"""
+    query = {}
+    
+    if current_user["role"] == "agent" and current_user.get("outlet_id"):
+        query["outlet_id"] = current_user["outlet_id"]
+    elif outlet_id:
+        query["outlet_id"] = outlet_id
+    
+    if start_date:
+        query["created_at"] = {"$gte": datetime.fromisoformat(start_date)}
+    if end_date:
+        if "created_at" in query:
+            query["created_at"]["$lte"] = datetime.fromisoformat(end_date) + timedelta(days=1)
+        else:
+            query["created_at"] = {"$lte": datetime.fromisoformat(end_date) + timedelta(days=1)}
+    
+    sales = await db.sales.find(query).sort("created_at", -1).to_list(1000)
+    
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sales Report"
+    
+    headers = ["Bill No", "Date", "Outlet", "Customer", "Total", "Cash", "Online", "Credit", "Payment Mode"]
+    ws.append(headers)
+    
+    for s in sales:
+        outlet = await db.outlets.find_one({"id": s["outlet_id"]})
+        ws.append([
+            s.get("bill_number", ""),
+            s.get("created_at", "").strftime("%Y-%m-%d %H:%M") if isinstance(s.get("created_at"), datetime) else str(s.get("created_at", "")),
+            outlet["name"] if outlet else "Unknown",
+            s.get("customer_name", "Walk-in"),
+            s.get("total_amount", 0),
+            s.get("cash_amount", 0),
+            s.get("online_amount", 0),
+            s.get("credit_amount", 0),
+            s.get("payment_mode", "")
+        ])
+    
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=sales_report.xlsx"}
+    )
+
+# ===================== INITIALIZATION =====================
+
+@api_router.post("/init/setup")
+async def initial_setup():
+    """Initialize the system with default admin and central outlet"""
+    # Check if already initialized
+    admin = await db.users.find_one({"role": "admin"})
+    if admin:
+        return {"message": "System already initialized", "admin_exists": True}
+    
+    # Create default admin
+    admin_user = UserInDB(
+        username="admin",
+        full_name="System Administrator",
+        role="admin",
+        hashed_password=get_password_hash("admin123"),
+        is_active=True
+    )
+    await db.users.insert_one(admin_user.dict())
+    
+    # Create central outlet
+    central_outlet = Outlet(
+        name="Sagen Baha FPO - Central Office",
+        address="Poraiyahat Block, Godda District",
+        contact_person="CEO Office",
+        is_central=True
+    )
+    await db.outlets.insert_one(central_outlet.dict())
+    
+    # Create default products
+    default_products = [
+        {"name": "Agnistra", "name_hi": "अग्निस्त्र", "unit": "litre", "category": "input"},
+        {"name": "Sanjeevini Compost", "name_hi": "संजीविनी खाद", "unit": "kg", "category": "input"},
+        {"name": "Multi Seed Extract", "name_hi": "मल्टी सीड एक्स्ट्रेक्ट", "unit": "litre", "category": "input"},
+        {"name": "Jeevamrit", "name_hi": "जीवामृत", "unit": "litre", "category": "input"},
+        {"name": "Paddy Seeds", "name_hi": "धान बीज", "unit": "kg", "category": "input"},
+    ]
+    
+    for p in default_products:
+        product = Product(**p)
+        await db.products.insert_one(product.dict())
+    
+    return {
+        "message": "System initialized successfully",
+        "admin_username": "admin",
+        "admin_password": "admin123",
+        "central_outlet_id": central_outlet.id
+    }
+
 @api_router.get("/")
 async def root():
-    return {"message": "Hello World"}
-
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.dict()
-    status_obj = StatusCheck(**status_dict)
-    _ = await db.status_checks.insert_one(status_obj.dict())
-    return status_obj
-
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    status_checks = await db.status_checks.find().to_list(1000)
-    return [StatusCheck(**status_check) for status_check in status_checks]
+    return {"message": "FPO Management System API", "version": "1.0"}
 
 # Include the router in the main app
 app.include_router(api_router)
@@ -62,13 +1387,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
