@@ -5,13 +5,21 @@ import { useAuthStore } from '../src/store/authStore';
 import { View, ActivityIndicator, Text, StyleSheet } from 'react-native';
 
 export default function RootLayout() {
-  const { isAuthenticated, user, _hasHydrated } = useAuthStore();
+  const { isAuthenticated, user } = useAuthStore();
   const segments = useSegments();
   const router = useRouter();
-  const [hasNavigated, setHasNavigated] = useState(false);
+  const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
-    if (!_hasHydrated || hasNavigated) return;
+    // Give zustand time to rehydrate
+    const timer = setTimeout(() => {
+      setIsReady(true);
+    }, 800);
+    return () => clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!isReady) return;
 
     const inAuthGroup = segments[0] === '(auth)';
     const inAdminGroup = segments[0] === '(admin)';
@@ -19,31 +27,23 @@ export default function RootLayout() {
     // Initial navigation based on auth state
     if (!isAuthenticated) {
       if (!inAuthGroup) {
-        setHasNavigated(true);
         router.replace('/(auth)/login');
       }
     } else {
       // User is authenticated
       if (inAuthGroup) {
-        setHasNavigated(true);
         if (user?.role === 'admin') {
           router.replace('/(admin)');
         } else {
           router.replace('/(agent)');
         }
       } else if (user?.role === 'agent' && inAdminGroup) {
-        setHasNavigated(true);
         router.replace('/(agent)');
       }
     }
-  }, [isAuthenticated, segments, _hasHydrated, user, hasNavigated]);
+  }, [isAuthenticated, segments, isReady, user]);
 
-  // Reset navigation flag when auth state changes
-  useEffect(() => {
-    setHasNavigated(false);
-  }, [isAuthenticated]);
-
-  if (!_hasHydrated) {
+  if (!isReady) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#2E7D32" />
