@@ -24,7 +24,7 @@ export default function AdminLayout() {
           paddingTop: 8,
         },
         tabBarLabelStyle: {
-          fontSize: 10,
+          fontSize: 9,
           fontWeight: '600',
         },
       }}
@@ -34,7 +34,7 @@ export default function AdminLayout() {
         options={{
           title: t('dashboard'),
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="grid" size={size} color={color} />
+            <Ionicons name="grid" size={size - 2} color={color} />
           ),
         }}
       />
@@ -43,7 +43,7 @@ export default function AdminLayout() {
         options={{
           title: t('sales'),
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="cart" size={size} color={color} />
+            <Ionicons name="cart" size={size - 2} color={color} />
           ),
         }}
       />
@@ -52,7 +52,7 @@ export default function AdminLayout() {
         options={{
           title: language === 'hi' ? 'खरीद' : 'Purchase',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="basket" size={size} color={color} />
+            <Ionicons name="basket" size={size - 2} color={color} />
           ),
         }}
       />
@@ -61,16 +61,25 @@ export default function AdminLayout() {
         options={{
           title: t('stock'),
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="cube" size={size} color={color} />
+            <Ionicons name="cube" size={size - 2} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="reports"
+        options={{
+          title: language === 'hi' ? 'रिपोर्ट' : 'Reports',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="document-text" size={size - 2} color={color} />
           ),
         }}
       />
       <Tabs.Screen
         name="users"
         options={{
-          title: language === 'hi' ? 'उपयोगकर्ता' : 'Users',
+          title: language === 'hi' ? 'यूज़र' : 'Users',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="people" size={size} color={color} />
+            <Ionicons name="people" size={size - 2} color={color} />
           ),
         }}
       />
@@ -79,7 +88,7 @@ export default function AdminLayout() {
         options={{
           title: t('settings'),
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="settings" size={size} color={color} />
+            <Ionicons name="settings" size={size - 2} color={color} />
           ),
         }}
       />
