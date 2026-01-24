@@ -6,8 +6,11 @@ interface User {
   id: string;
   username: string;
   full_name: string;
-  role: 'admin' | 'agent';
+  role: 'admin' | 'agent' | 'farmer';
   outlet_id: string | null;
+  village?: string;
+  mobile?: string;
+  status?: string;
 }
 
 interface AuthState {
@@ -15,8 +18,8 @@ interface AuthState {
   user: User | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  setAuth: (token: string, user: User) => void;
-  logout: () => void;
+  setAuth: (token: string, user: User) => Promise<void>;
+  logout: () => Promise<void>;
   hydrate: () => Promise<void>;
 }
 
@@ -69,26 +72,27 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   isLoading: true,
   
   setAuth: async (token: string, user: User) => {
+    // Persist to storage first
+    await setStorage({ token, user, isAuthenticated: true });
+    
     set({
       token,
       user,
       isAuthenticated: true,
       isLoading: false,
     });
-    
-    // Persist to storage
-    await setStorage({ token, user, isAuthenticated: true });
   },
   
   logout: async () => {
+    // Clear storage first
+    await clearStorage();
+    
     set({
       token: null,
       user: null,
       isAuthenticated: false,
+      isLoading: false,
     });
-    
-    // Clear storage
-    await clearStorage();
   },
   
   hydrate: async () => {
