@@ -252,6 +252,88 @@ export default function SalesScreen() {
     setShowBillDetails(true);
   };
 
+  const handlePrintBill = async () => {
+    if (!selectedSale) return;
+    
+    setIsPrinting(true);
+    try {
+      const outlet = outlets.find(o => o.id === selectedSale.outlet_id);
+      
+      const billData = {
+        billNumber: selectedSale.bill_number,
+        date: new Date(selectedSale.created_at).toLocaleDateString('en-IN'),
+        customerName: selectedSale.customer_name || (language === 'hi' ? 'वॉक-इन ग्राहक' : 'Walk-in Customer'),
+        customerMobile: undefined,
+        outletName: outlet?.name || selectedSale.outlet_name || '',
+        items: selectedSale.items.map(item => ({
+          name: item.product_name,
+          quantity: item.quantity,
+          unit: 'unit',
+          rate: item.rate,
+          amount: item.amount,
+        })),
+        subtotal: selectedSale.items.reduce((sum, i) => sum + i.amount, 0),
+        discount: 0,
+        total: selectedSale.total_amount,
+        paidAmount: selectedSale.cash_amount + selectedSale.online_amount,
+        dueAmount: selectedSale.credit_amount,
+        paymentMode: selectedSale.payment_mode,
+        language: settingsLanguage,
+      };
+
+      await printBill(billData);
+    } catch (error) {
+      console.error('Print error:', error);
+      Alert.alert(
+        t('error'),
+        language === 'hi' ? 'प्रिंट करने में त्रुटि' : 'Failed to print bill'
+      );
+    } finally {
+      setIsPrinting(false);
+    }
+  };
+
+  const handleShareBill = async () => {
+    if (!selectedSale) return;
+    
+    setIsPrinting(true);
+    try {
+      const outlet = outlets.find(o => o.id === selectedSale.outlet_id);
+      
+      const billData = {
+        billNumber: selectedSale.bill_number,
+        date: new Date(selectedSale.created_at).toLocaleDateString('en-IN'),
+        customerName: selectedSale.customer_name || (language === 'hi' ? 'वॉक-इन ग्राहक' : 'Walk-in Customer'),
+        customerMobile: undefined,
+        outletName: outlet?.name || selectedSale.outlet_name || '',
+        items: selectedSale.items.map(item => ({
+          name: item.product_name,
+          quantity: item.quantity,
+          unit: 'unit',
+          rate: item.rate,
+          amount: item.amount,
+        })),
+        subtotal: selectedSale.items.reduce((sum, i) => sum + i.amount, 0),
+        discount: 0,
+        total: selectedSale.total_amount,
+        paidAmount: selectedSale.cash_amount + selectedSale.online_amount,
+        dueAmount: selectedSale.credit_amount,
+        paymentMode: selectedSale.payment_mode,
+        language: settingsLanguage,
+      };
+
+      await shareBillAsPDF(billData);
+    } catch (error) {
+      console.error('Share error:', error);
+      Alert.alert(
+        t('error'),
+        language === 'hi' ? 'शेयर करने में त्रुटि' : 'Failed to share bill'
+      );
+    } finally {
+      setIsPrinting(false);
+    }
+  };
+
   const renderSaleItem = ({ item }: { item: Sale }) => (
     <Card onPress={() => viewBill(item)}>
       <View style={styles.saleRow}>
