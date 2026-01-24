@@ -390,6 +390,13 @@ async def login(request: LoginRequest):
     if not user.get("is_active", True):
         raise HTTPException(status_code=401, detail="Account is disabled")
     
+    # Check if agent is pending approval
+    if user.get("role") == "agent" and user.get("status") == "pending":
+        raise HTTPException(status_code=401, detail="Your account is pending approval by admin")
+    
+    if user.get("status") == "rejected":
+        raise HTTPException(status_code=401, detail="Your account registration was rejected")
+    
     access_token = create_access_token(data={"sub": user["username"]})
     return {
         "access_token": access_token,
@@ -399,9 +406,65 @@ async def login(request: LoginRequest):
             "username": user["username"],
             "full_name": user["full_name"],
             "role": user["role"],
-            "outlet_id": user.get("outlet_id")
+            "outlet_id": user.get("outlet_id"),
+            "status": user.get("status", "active"),
+            "village": user.get("village"),
+            "mobile": user.get("mobile")
         }
     }
+
+@api_router.post("/auth/register")
+async def register(request: RegisterRequest):
+    """Register a new user (farmer or agent)"""
+    # Check if username exists
+    existing = await db.users.find_one({"username": request.username})
+    if existing:
+        raise HTTPException(status_code=400, detail="Username already exists")
+    
+    # Only farmer and agent can self-register
+    if request.role not in ["farmer", "agent"]:
+        raise HTTPException(status_code=400, detail="Invalid role. Only farmer or agent can self-register")
+    
+    # Determine status based on role
+    status = "active" if request.role == "farmer" else "pending"  # Agents need approval
+    
+    user_obj = UserInDB(
+        username=request.username,
+        full_name=request.full_name,
+        role=request.role,
+        mobile=request.mobile,
+        village=request.village,
+        status=status,
+        is_active=True if request.role == "farmer" else False,  # Agents inactive until approved
+        hashed_password=get_password_hash(request.password)
+    )
+    
+    await db.users.insert_one(user_obj.dict())
+    
+    if request.role == "agent":
+        return {
+            "message": "Registration successful. Your account is pending approval by admin.",
+            "status": "pending"
+        }
+    else:
+        # Auto-login for farmers
+        access_token = create_access_token(data={"sub": request.username})
+        return {
+            "message": "Registration successful",
+            "status": "active",
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "id": user_obj.id,
+                "username": user_obj.username,
+                "full_name": user_obj.full_name,
+                "role": user_obj.role,
+                "outlet_id": None,
+                "status": "active",
+                "village": user_obj.village,
+                "mobile": user_obj.mobile
+            }
+        }
 
 @api_router.post("/auth/change-password")
 async def change_password(request: PasswordChangeRequest, current_user: dict = Depends(get_current_user)):
