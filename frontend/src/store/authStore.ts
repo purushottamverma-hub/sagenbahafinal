@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
+import { persist, createJSONStorage, StateStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 
@@ -21,36 +21,26 @@ interface AuthState {
   setHasHydrated: (state: boolean) => void;
 }
 
-// Simple localStorage wrapper for web
-const webStorage = {
-  getItem: (name: string) => {
+// Web storage wrapper
+const webStorage: StateStorage = {
+  getItem: (name: string): string | null => {
     try {
-      const value = localStorage.getItem(name);
-      return value ? JSON.parse(value) : null;
+      return localStorage.getItem(name);
     } catch {
       return null;
     }
   },
-  setItem: (name: string, value: any) => {
+  setItem: (name: string, value: string): void => {
     try {
-      localStorage.setItem(name, JSON.stringify(value));
+      localStorage.setItem(name, value);
     } catch {}
   },
-  removeItem: (name: string) => {
+  removeItem: (name: string): void => {
     try {
       localStorage.removeItem(name);
     } catch {}
   },
 };
-
-// Use localStorage on web, AsyncStorage on native
-const storage = Platform.OS === 'web' 
-  ? {
-      getItem: async (name: string) => webStorage.getItem(name),
-      setItem: async (name: string, value: string) => webStorage.setItem(name, JSON.parse(value)),
-      removeItem: async (name: string) => webStorage.removeItem(name),
-    }
-  : createJSONStorage(() => AsyncStorage);
 
 export const useAuthStore = create<AuthState>()(
   persist(
@@ -73,7 +63,9 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'auth-storage',
-      storage: storage,
+      storage: Platform.OS === 'web' 
+        ? createJSONStorage(() => webStorage)
+        : createJSONStorage(() => AsyncStorage),
       onRehydrateStorage: () => (state) => {
         state?.setHasHydrated(true);
       },
