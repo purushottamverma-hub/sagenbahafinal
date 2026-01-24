@@ -1,0 +1,189 @@
+<analysis>
+<original_problem_statement>
+Build a cross-platform, offline-first application for a Farmer Producer Company (FPO) to manage inventory, sales, procurement, and billing across multiple outlets.
+
+**PRODUCT REQUIREMENTS:**
+- **User Roles:** Admin (full access) and Agent (outlet-level access).
+- **Authentication:** Secure login. Admin creates outlets and agent users.
+- **Inventory Management:** Track stock (opening, received, sold, damaged) per product and outlet. Admin has central visibility and can allocate stock.
+- **Sales &amp; Billing:** Agents can record sales (cash, online, credit, partial). Bills are generated automatically (printable PDF). Offline billing with sync is required.
+- **Customer Management:** Create customer profiles and maintain a ledger for sales, credit, and payments.
+- **Farmer Procurement:** Create farmer profiles, record produce purchases, and maintain a farmer ledger for payments.
+- **Dashboard &amp; Reports (Admin):** View daily/monthly sales, stock overview, and outlet performance. Generate and export reports (Sales, Stock, Customer, Farmer) to Excel.
+- **Technical:** PWA for Android and desktop browsers, offline-first for mobile, bilingual (Hindi/English).
+- **Initial Product list:** Agnistra (Litre), Sanjeevini Compost (kg), Multi seed Extract (Litre), Jeevamrit (Litre), Paddy Seeds.
+</original_problem_statement>
+
+**User's preferred language**: English, but the application UI must support both English and Hindi.
+
+**what currently exists?**
+A substantial MVP has been developed. The backend is built with FastAPI and MongoDB, featuring models and API endpoints for users, auth, products, and initial system setup. The frontend is an Expo app using  for navigation. The UI structure for both Admin and Agent roles is in place, including layouts and screens for the dashboard, sales, stock, management, and settings. A bilingual (English/Hindi) framework is integrated using . The login functionality is working, and after a successful login, the Admin is redirected to a functional (though data-less) dashboard.
+
+**Last working item**:
+-   **Last item agent was working**: The agent was addressing critical issues identified by the  to ensure the application is ready for deployment. This involved:
+    1.  Updating the  script in .
+    2.  Refactoring  to correctly load environment variables without hardcoded fallbacks.
+    3.  Updating  with a  and .
+    After making these changes, the agent restarted the backend and ran a comprehensive health check which passed, confirming that all services were running correctly.
+-   **Status**: USER VERIFICATION PENDING
+-   **Agent Testing Done**: Y
+-   **Which testing method agent to use?**: manual testing by curl
+-   **User Testing Done**: N
+
+**All Pending/In progress Issue list**:
+-   **Issue 1: State persistence is disabled, breaking offline-first and session retention (P0)**
+-   **Issue 2: Root URL () does not redirect to the login page (P1)**
+-   **Issue 3: TypeScript type errors exist in the codebase (P2)**
+
+**Issues Detail**:
+-   **Issue 1: State persistence is disabled**
+    -   **Attempted fixes**: The agent encountered a critical Javascript error () which broke the entire frontend application. This was traced back to the . To get the app rendering, the agent removed the  middleware from  and . This was a workaround, not a fix.
+    -   **Next debug checklist**:
+        1.  Reinstate the  middleware in  and .
+        2.  The  middleware requires a storage adapter. For cross-platform compatibility, use  which is much faster than .
+        3.  Create a custom storage adapter for  that uses  for native and potentially  for web, or a library that handles this abstraction.
+        4.  File to fix: , .
+        5.  Reference  documentation on creating custom storage for .
+    -   **Why fix this issue and what will be achieved with the fix?**: Fixing this is critical to re-enable user session persistence (staying logged in) and saving user preferences (like language). It is the foundational step for achieving the core offline-first requirement.
+    -   **Status**: NOT STARTED
+    -   **Is recurring issue?**: Y (The  error was a recurring symptom until the cause was found).
+    -   **Should Test frontend/backend/both after fix?**: frontend
+    -   **Blocked on other issue**: None
+
+-   **Issue 2: Root URL () does not redirect to the login page**
+    -   **Attempted fixes**: The agent identified that on initial load, the root path () renders a blank page instead of redirecting to the login screen. This is because the  component in  doesn't execute correctly during Server-Side Rendering (SSR). The agent tried replacing the redirect with a temporary component, which also didn't work.
+    -   **Next debug checklist**:
+        1.  Review . The current implementation relies on a client-side auth state check to redirect.
+        2.  Modify the root layout  to handle the initial routing logic. Use the  and  hooks from  inside a  to check for an auth token (once persistence is fixed) and programmatically redirect to  or  as needed.
+        3.  Ensure this effect only runs on the client-side after hydration to avoid SSR issues.
+    -   **Why fix this issue and what will be achieved with the fix?**: This will provide a seamless user experience, directing new users to the login page automatically instead of showing them a blank screen.
+    -   **Status**: NOT STARTED
+    -   **Is recurring issue?**: Y
+    -   **Should Test frontend/backend/both after fix?**: frontend
+    -   **Blocked on other issue**: Issue 1 (The redirect logic depends on a persisted auth state).
+
+-   **Issue 3: TypeScript type errors exist in the codebase**
+    -   **Attempted fixes**: The agent ran  and found several type errors, such as . The agent dismissed them as non-blocking but fixed one related to .
+    -   **Next debug checklist**:
+        1.  Run  to get a list of all current type errors.
+        2.  Address the errors one by one. Many are likely related to the removal of the  middleware and will be resolved when Issue 1 is fixed.
+        3.  Pay attention to style-related type errors and ensure all style objects conform to React Native's  types.
+    -   **Why fix this issue and what will be achieved with the fix?**: Ensures code quality, type safety, and prevents potential runtime bugs.
+    -   **Status**: NOT STARTED
+    -   **Is recurring issue?**: N
+    -   **Should Test frontend/backend/both after fix?**: frontend
+    -   **Blocked on other issue**: None
+
+**In progress Task List**:
+None.
+
+**Upcoming and Future Tasks**
+**Upcoming Tasks:**
+-   **P0 - Implement Full Sales &amp; Billing Flow:** Implement the New Sale functionality on the  and  screens. This includes selecting customers, adding products, calculating totals, and handling cash/credit payments. This involves creating new API endpoints and frontend forms.
+-   **P1 - Implement Full Stock Management:** Implement the Add Stock, Allocate Stock, and Report Damage features on the  screen.
+-   **P1 - Implement Outlet/User/Product Management:** Implement the creation and editing functionality in the  screen for Outlets, Products, Customers, and Farmers.
+-   **P2 - Farmer Procurement Module:** Build the UI and backend logic for recording produce purchases from farmers.
+
+**Future Tasks:**
+-   Implement PDF bill generation and printing.
+-   Implement all Admin reports with Excel export functionality.
+-   Allow Admin to upload a custom FPO logo in the settings.
+-   Implement the offline data synchronization strategy.
+
+**Completed work in this session**
+- **Backend Setup (DONE):** Initialized a FastAPI server with a connection to MongoDB. Created Pydantic models and API endpoints for Users, Authentication (JWT), and Products. Pre-populated default products.
+- **Frontend Scaffolding (DONE):** Set up an Expo project with TypeScript and .
+- **UI Structure &amp; Navigation (DONE):** Created file-based routes for , , and  roles. Implemented tab-based navigation for admin and agent dashboards.
+- **Bilingual Support (DONE):** Integrated  for English and Hindi translations.
+- **Authentication UI (DONE):** Built the login screen .
+- **Admin Dashboard (DONE):** The Admin dashboard and its sub-pages (Sales, Stock, Manage, Settings) are visually complete with empty states.
+- **Login Flow (DONE):** The user can log in as 'admin' and is redirected to the admin dashboard.
+
+**Earlier issues found/mentioned but not fixed**
+- The core issues are listed in the **All Pending/In progress Issue list** section. The primary ones are the disabled state persistence and the broken root redirect.
+
+**Known issue recurrence from previous fork**
+- **Issue recurrence in previous fork**:  - A ngrok tunnel endpoint conflict that caused the expo development server to fail repeatedly.
+- **Recurrence count**: High (occurred ~5-6 times).
+- **Status**: RESOLVED (workaround). The agent resolved it by killing the hanging  process and waiting for the tunnel to expire. This is a platform issue that may reappear.
+
+**Code Architecture**
+
+
+**Key Technical Concepts**
+-   **Frontend**: React Native, Expo, TypeScript, Expo Router (file-based routing)
+-   **Backend**: FastAPI (Python), MongoDB
+-   **State Management**: Zustand (currently with  middleware disabled)
+-   **Internationalization**: i18next
+-   **Styling**: React Native 
+
+**key DB schema**
+-   **User**: 
+-   **Product**: 
+-   **(Implicit)**: Outlet, Customer, Farmer, Sale, Purchase, StockEntry models are defined in  but not yet fully exposed via APIs.
+
+**changes in tech stack**
+None.
+
+**All files of reference**
+-   : Contains all backend logic, API endpoints, and database models.
+-   : The root layout file for the app, controls overall structure and navigation state.
+-   : The entry point of the app, responsible for initial redirection based on auth status.
+-   : The login screen component.
+-   : Zustand store for authentication state. **Crucially,  is disabled here.**
+-   : Zustand store for app settings like language. **Crucially,  is disabled here.**
+-   : Expo configuration file.  was changed to .
+
+**Areas that need refactoring**:
+-   The  and  need to be refactored to re-introduce persistence in a way that works on both native and web, as this is a core requirement.
+
+**key api endpoints**
+-   : User login, returns JWT token.
+-   : Get current user details.
+-   : Checks if the system has been initialized.
+-   : Get a list of all products.
+-   : Get statistics for the admin dashboard.
+
+**Critical Info for New Agent**
+The most critical issue to address is the **disabled state persistence**. The previous agent removed the  middleware to fix a web-build error ( not supported). This makes the app non-functional for real-world use as login sessions and settings are not saved. You **must** re-implement persistence. The recommended approach is to use a library like  with a custom storage adapter for Zustand that works cross-platform. Without this fix, many other features (like offline mode and user-specific data) cannot be built. Also, the root URL () redirect is broken and needs to be fixed for a good user experience.
+
+**documents created in this job**
+-   
+
+**Last 10 User Messages and any pending HUMAN messages**
+1.  **User**: I have added the credit.
+    -   *Summary*: User confirmed they added more credits to continue the session.
+    -   *Status*: Addressed. The agent acknowledged and continued working.
+2.  **User**: (Initial Detailed Request)
+    -   *Summary*: The user provided detailed requirements for the FPO application, including roles, features, and technical specifications, and answered the agent's clarifying questions.
+    -   *Status*: Acknowledged. The agent used this information to build the MVP.
+
+**Project Health Check:**
+-   **Broken**:
+    -   State Persistence: Login sessions and user settings are not saved across reloads.
+    -   Root Redirect: The main entry point  is a blank page.
+    -   Offline-first capability: This is fundamentally broken due to the lack of state persistence.
+-   **Mocked**: None
+
+**3rd Party Integrations**
+-   None explicitly added yet. The app uses standard open-source libraries (FastAPI, Expo, Zustand, etc.).
+
+**Testing status**
+-   **Testing agent used after significant changes**: YES (Deployer Agent was used for a health check).
+-   **Troubleshoot agent used after agent stuck in loop**: YES (Used for the  issue).
+-   **Test files created**: []
+-   **Known regressions**: State persistence was removed, which is a major regression from the initial plan.
+
+**Credentials to test flow:**
+-   **Username**: admin
+-   **Password**: admin
+
+**What agent forgot to execute**
+-   The agent did not implement a proper fix for the  issue. It opted for a workaround (disabling it) that breaks a core requirement (offline-first and session persistence).
+-   The agent did not resolve the root URL redirect issue, leaving a poor initial user experience.
+
+</analysis>
+<SYS_PROMPT_SEPARATOR>
+<workspace_dir>
+/app
+</workspace_dir>
