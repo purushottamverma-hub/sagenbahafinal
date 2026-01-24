@@ -798,6 +798,7 @@ async def get_stock(outlet_id: Optional[str] = None, current_user: dict = Depend
     # Enrich with product and outlet info
     result = []
     for s in stocks:
+        s.pop('_id', None)  # Remove MongoDB _id
         product = await db.products.find_one({"id": s["product_id"]})
         outlet = await db.outlets.find_one({"id": s["outlet_id"]})
         result.append({
