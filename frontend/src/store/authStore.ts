@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage, StateStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface User {
@@ -14,38 +13,69 @@ interface AuthState {
   token: string | null;
   user: User | null;
   isAuthenticated: boolean;
-  _hasHydrated: boolean;
+  isLoading: boolean;
   setAuth: (token: string, user: User) => void;
   logout: () => void;
-  setHasHydrated: (state: boolean) => void;
+  loadStoredAuth: () => Promise<void>;
 }
 
-// Use AsyncStorage which works for both web and native in Expo
-export const useAuthStore = create<AuthState>()(
-  persist(
-    (set) => ({
+export const useAuthStore = create<AuthState>((set, get) => ({
+  token: null,
+  user: null,
+  isAuthenticated: false,
+  isLoading: true,
+  
+  setAuth: async (token: string, user: User) => {
+    // Store to AsyncStorage
+    try {
+      await AsyncStorage.setItem('auth-token', token);
+      await AsyncStorage.setItem('auth-user', JSON.stringify(user));
+    } catch (e) {
+      console.error('Failed to save auth:', e);
+    }
+    
+    set({
+      token,
+      user,
+      isAuthenticated: true
+    });
+  },
+  
+  logout: async () => {
+    // Clear from AsyncStorage
+    try {
+      await AsyncStorage.removeItem('auth-token');
+      await AsyncStorage.removeItem('auth-user');
+    } catch (e) {
+      console.error('Failed to clear auth:', e);
+    }
+    
+    set({
       token: null,
       user: null,
-      isAuthenticated: false,
-      _hasHydrated: false,
-      setAuth: (token: string, user: User) => set({
-        token,
-        user,
-        isAuthenticated: true
-      }),
-      logout: () => set({
-        token: null,
-        user: null,
-        isAuthenticated: false
-      }),
-      setHasHydrated: (state: boolean) => set({ _hasHydrated: state }),
-    }),
-    {
-      name: 'auth-storage',
-      storage: createJSONStorage(() => AsyncStorage),
-      onRehydrateStorage: () => (state) => {
-        state?.setHasHydrated(true);
-      },
+      isAuthenticated: false
+    });
+  },
+  
+  loadStoredAuth: async () => {
+    try {
+      const token = await AsyncStorage.getItem('auth-token');
+      const userStr = await AsyncStorage.getItem('auth-user');
+      
+      if (token && userStr) {
+        const user = JSON.parse(userStr) as User;
+        set({
+          token,
+          user,
+          isAuthenticated: true,
+          isLoading: false
+        });
+      } else {
+        set({ isLoading: false });
+      }
+    } catch (e) {
+      console.error('Failed to load auth:', e);
+      set({ isLoading: false });
     }
-  )
-);
+  }
+}));
