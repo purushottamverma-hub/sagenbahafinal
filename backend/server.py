@@ -1145,12 +1145,15 @@ async def get_sales(
     
     sales = await db.sales.find(query).sort("created_at", -1).to_list(1000)
     
-    # Enrich with outlet info
+    # Clean up and enrich with outlet info
+    result = []
     for sale in sales:
+        sale.pop('_id', None)  # Remove MongoDB _id
         outlet = await db.outlets.find_one({"id": sale["outlet_id"]})
         sale["outlet_name"] = outlet["name"] if outlet else "Unknown"
+        result.append(sale)
     
-    return sales
+    return result
 
 @api_router.get("/sales/{sale_id}")
 async def get_sale(sale_id: str, current_user: dict = Depends(get_current_user)):
