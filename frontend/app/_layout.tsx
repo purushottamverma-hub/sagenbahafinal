@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
@@ -6,30 +6,11 @@ import { useAuthStore } from '../src/store/authStore';
 import { useSettingsStore } from '../src/store/settingsStore';
 
 export default function RootLayout() {
-  const [isReady, setIsReady] = useState(false);
-  const loadStoredAuth = useAuthStore((state) => state.loadStoredAuth);
-  const loadSettings = useSettingsStore((state) => state.loadSettings);
+  const authHydrated = useAuthStore((state) => state._hasHydrated);
+  const settingsHydrated = useSettingsStore((state) => state._hasHydrated);
 
-  useEffect(() => {
-    const initializeApp = async () => {
-      try {
-        // Load stored auth and settings in parallel
-        await Promise.all([
-          loadStoredAuth(),
-          loadSettings()
-        ]);
-      } catch (error) {
-        console.error('Failed to initialize app:', error);
-      } finally {
-        setIsReady(true);
-      }
-    };
-
-    initializeApp();
-  }, []);
-
-  // Show loading screen while initializing
-  if (!isReady) {
+  // Show loading screen while stores are hydrating
+  if (!authHydrated || !settingsHydrated) {
     return (
       <View style={styles.loadingContainer}>
         <StatusBar style="dark" />
