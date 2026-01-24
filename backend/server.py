@@ -263,19 +263,25 @@ class FarmerPurchaseBase(BaseModel):
     product_name: Optional[str] = None
     quantity: float
     rate: float
-    total_amount: float
-    payment_mode: str  # cash, online, credit, partial
+    total_amount: float = 0
+    payment_mode: str = "cash"  # cash, online, credit, partial
+    payment_status: str = "paid"  # paid, credit (simplified)
     cash_amount: float = 0
     online_amount: float = 0
     credit_amount: float = 0
     notes: Optional[str] = None
 
-class FarmerPurchaseCreate(FarmerPurchaseBase):
-    pass
+class FarmerPurchaseCreate(BaseModel):
+    farmer_id: str
+    product_id: str
+    quantity: float
+    rate: float
+    payment_status: str = "paid"  # paid or credit
 
 class FarmerPurchase(FarmerPurchaseBase):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     receipt_number: str = ""
+    payment_status: str = "paid"
     created_by: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
