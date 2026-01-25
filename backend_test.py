@@ -1641,6 +1641,15 @@ class AuthTester:
                 self.test_results['failed'] += 1
                 self.test_results['errors'].append(f"{test.__name__}: Crashed - {str(e)}")
         
+        print(f"\n{Colors.BOLD}=== NEW FEATURES TESTS ==={Colors.ENDC}")
+        for test in new_features_tests:
+            try:
+                test()
+            except Exception as e:
+                print_error(f"Test {test.__name__} crashed: {str(e)}")
+                self.test_results['failed'] += 1
+                self.test_results['errors'].append(f"{test.__name__}: Crashed - {str(e)}")
+        
         # Print summary
         self.print_summary()
         
