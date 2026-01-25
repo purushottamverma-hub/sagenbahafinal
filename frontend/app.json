@@ -41,7 +41,7 @@
       "typedRoutes": true
     },
     "extra": {
-      "expoHostname": "https://fpo-manager.preview.emergentagent.com"
+      "expoHostname": "https://agrisync.preview.emergentagent.com"
     }
   }
 }
