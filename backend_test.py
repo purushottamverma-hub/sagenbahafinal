@@ -2,10 +2,10 @@
 """
 FPO Management System - Backend API Testing
 Testing authentication endpoints, protected routes, Admin CRUD operations,
-and three new features:
-1. Agent Stock Transfer Request
-2. Farmer Product Requests  
-3. Search Functionality
+and three NEW features requested for testing:
+1. Notifications System
+2. Shareholder Upgrade System  
+3. Vendor Procurement System
 """
 
 import requests
