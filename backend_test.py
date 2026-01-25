@@ -1249,6 +1249,320 @@ class AuthTester:
             self.log_result("Reject Transfer Request", False, "Request failed", str(e))
             return False
 
+    # ===================== NEW FEATURES TESTING =====================
+    
+    def test_feature_a_stock_transfer_requests(self):
+        """Test Feature A: Agent Stock Transfer Request - New endpoints"""
+        print_test_header("Feature A: Agent Stock Transfer Request")
+        
+        if not self.admin_token:
+            self.log_result("Feature A Setup", False, "No admin token available")
+            return False
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.admin_token}"
+        }
+        
+        # Get test data first
+        product_id = None
+        from_outlet_id = None
+        to_outlet_id = None
+        
+        try:
+            # Get products
+            response = self.session.get(f"{BASE_URL}/products", headers=headers)
+            if response.status_code == 200:
+                products = response.json()
+                if len(products) > 0:
+                    product_id = products[0]["id"]
+                    print_info(f"Using product: {products[0]['name']}")
+            
+            # Get outlets
+            response = self.session.get(f"{BASE_URL}/outlets", headers=headers)
+            if response.status_code == 200:
+                outlets = response.json()
+                if len(outlets) >= 2:
+                    from_outlet_id = outlets[0]["id"]
+                    to_outlet_id = outlets[1]["id"]
+                    print_info(f"From: {outlets[0]['name']} -> To: {outlets[1]['name']}")
+            
+            if not product_id or not from_outlet_id or not to_outlet_id:
+                self.log_result("Feature A", False, "Insufficient test data (need products and outlets)")
+                return False
+            
+            # Add stock for testing
+            stock_data = {
+                "product_id": product_id,
+                "outlet_id": from_outlet_id,
+                "quantity": 100
+            }
+            self.session.post(f"{BASE_URL}/stock/add", json=stock_data, headers=headers)
+            
+            # Test 1: GET /api/stock/transfer-requests - List all transfer requests
+            response = self.session.get(f"{BASE_URL}/stock/transfer-requests", headers=headers)
+            print_info(f"GET Transfer Requests - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                requests_data = response.json()
+                self.log_result("GET Transfer Requests", True, f"Retrieved {len(requests_data)} transfer requests")
+            else:
+                self.log_result("GET Transfer Requests", False, f"HTTP {response.status_code}: {response.text}")
+                return False
+            
+            # Test 2: POST /api/stock/transfer-request - Create a transfer request
+            transfer_data = {
+                "product_id": product_id,
+                "from_outlet_id": from_outlet_id,
+                "to_outlet_id": to_outlet_id,
+                "quantity": 25,
+                "reason": "Testing new feature A"
+            }
+            
+            response = self.session.post(f"{BASE_URL}/stock/transfer-request", json=transfer_data, headers=headers)
+            print_info(f"POST Transfer Request - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                if "request_id" in data:
+                    request_id = data["request_id"]
+                    self.log_result("POST Transfer Request", True, f"Created transfer request: {request_id}")
+                else:
+                    self.log_result("POST Transfer Request", False, "No request_id in response")
+                    return False
+            else:
+                self.log_result("POST Transfer Request", False, f"HTTP {response.status_code}: {response.text}")
+                return False
+            
+            # Test 3: GET /api/stock/transfer-requests/pending-count - Get pending count
+            response = self.session.get(f"{BASE_URL}/stock/transfer-requests/pending-count", headers=headers)
+            print_info(f"GET Pending Count - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                if "count" in data:
+                    self.log_result("GET Pending Count", True, f"Pending transfer requests: {data['count']}")
+                else:
+                    self.log_result("GET Pending Count", False, "No count in response")
+                    return False
+            else:
+                self.log_result("GET Pending Count", False, f"HTTP {response.status_code}: {response.text}")
+                return False
+            
+            self.log_result("Feature A Complete", True, "All Agent Stock Transfer Request endpoints working")
+            return True
+            
+        except Exception as e:
+            self.log_result("Feature A", False, "Request failed", str(e))
+            return False
+    
+    def test_feature_b_farmer_product_requests(self):
+        """Test Feature B: Farmer Product Requests"""
+        print_test_header("Feature B: Farmer Product Requests")
+        
+        # First register/login as farmer
+        farmer_token = None
+        farmer_data = {
+            "username": "testfarmer100",
+            "password": "test123",
+            "full_name": "Test Farmer",
+            "role": "farmer"
+        }
+        
+        try:
+            # Try to register farmer
+            response = self.session.post(f"{BASE_URL}/auth/register", json=farmer_data)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if "access_token" in data:
+                    farmer_token = data["access_token"]
+                    print_success("Farmer registration and auto-login successful")
+                else:
+                    # Try to login if registration failed due to existing user
+                    login_response = self.session.post(f"{BASE_URL}/auth/login", json={
+                        "username": farmer_data["username"],
+                        "password": farmer_data["password"]
+                    })
+                    
+                    if login_response.status_code == 200:
+                        login_data = login_response.json()
+                        if "access_token" in login_data:
+                            farmer_token = login_data["access_token"]
+                            print_success("Farmer login successful (user already exists)")
+            
+            if not farmer_token:
+                self.log_result("Feature B Setup", False, "Could not get farmer token")
+                return False
+            
+            farmer_headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {farmer_token}"
+            }
+            
+            # Get test data
+            product_id = None
+            outlet_id = None
+            
+            if self.admin_token:
+                admin_headers = {
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.admin_token}"
+                }
+                
+                # Get products
+                response = self.session.get(f"{BASE_URL}/products", headers=admin_headers)
+                if response.status_code == 200:
+                    products = response.json()
+                    if len(products) > 0:
+                        product_id = products[0]["id"]
+                
+                # Get outlets
+                response = self.session.get(f"{BASE_URL}/outlets", headers=admin_headers)
+                if response.status_code == 200:
+                    outlets = response.json()
+                    if len(outlets) > 0:
+                        outlet_id = outlets[0]["id"]
+            
+            if not product_id or not outlet_id:
+                self.log_result("Feature B", False, "Insufficient test data")
+                return False
+            
+            # Test 1: GET /api/product-requests - List farmer's own requests
+            response = self.session.get(f"{BASE_URL}/product-requests", headers=farmer_headers)
+            print_info(f"GET Product Requests - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                requests_data = response.json()
+                self.log_result("GET Product Requests", True, f"Retrieved {len(requests_data)} product requests")
+            else:
+                self.log_result("GET Product Requests", False, f"HTTP {response.status_code}: {response.text}")
+                return False
+            
+            # Test 2: POST /api/product-requests - Create a buy request
+            buy_request = {
+                "product_id": product_id,
+                "quantity": 50,
+                "request_type": "buy",
+                "outlet_id": outlet_id
+            }
+            
+            response = self.session.post(f"{BASE_URL}/product-requests", json=buy_request, headers=farmer_headers)
+            print_info(f"POST Buy Request - Status: {response.status_code}")
+            
+            buy_request_id = None
+            if response.status_code == 200:
+                data = response.json()
+                if "request_id" in data:
+                    buy_request_id = data["request_id"]
+                    self.log_result("POST Buy Request", True, f"Created buy request: {buy_request_id}")
+                else:
+                    self.log_result("POST Buy Request", False, "No request_id in response")
+                    return False
+            else:
+                self.log_result("POST Buy Request", False, f"HTTP {response.status_code}: {response.text}")
+                return False
+            
+            # Test 3: POST /api/product-requests - Create a sell request with custom product
+            sell_request = {
+                "product_id": "custom",
+                "custom_product_name": "Organic Rice",
+                "quantity": 100,
+                "request_type": "sell",
+                "outlet_id": outlet_id
+            }
+            
+            response = self.session.post(f"{BASE_URL}/product-requests", json=sell_request, headers=farmer_headers)
+            print_info(f"POST Sell Request (Custom) - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                if "request_id" in data:
+                    self.log_result("POST Sell Request (Custom)", True, f"Created sell request: {data['request_id']}")
+                else:
+                    self.log_result("POST Sell Request (Custom)", False, "No request_id in response")
+                    return False
+            else:
+                self.log_result("POST Sell Request (Custom)", False, f"HTTP {response.status_code}: {response.text}")
+                return False
+            
+            # Test 4: PUT /api/product-requests/{id} - Cancel a request
+            if buy_request_id:
+                cancel_data = {"status": "cancelled"}
+                
+                response = self.session.put(f"{BASE_URL}/product-requests/{buy_request_id}", json=cancel_data, headers=farmer_headers)
+                print_info(f"PUT Cancel Request - Status: {response.status_code}")
+                
+                if response.status_code == 200:
+                    self.log_result("PUT Cancel Request", True, "Successfully cancelled product request")
+                else:
+                    self.log_result("PUT Cancel Request", False, f"HTTP {response.status_code}: {response.text}")
+                    return False
+            else:
+                self.log_result("PUT Cancel Request", False, "No request ID available to cancel")
+                return False
+            
+            self.log_result("Feature B Complete", True, "All Farmer Product Request endpoints working")
+            return True
+            
+        except Exception as e:
+            self.log_result("Feature B", False, "Request failed", str(e))
+            return False
+    
+    def test_feature_c_search_functionality(self):
+        """Test Feature C: Search Functionality"""
+        print_test_header("Feature C: Search Functionality")
+        
+        if not self.admin_token:
+            self.log_result("Feature C Setup", False, "No admin token available")
+            return False
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.admin_token}"
+        }
+        
+        try:
+            # Test 1: GET /api/products - List products (frontend will filter client-side)
+            response = self.session.get(f"{BASE_URL}/products", headers=headers)
+            print_info(f"GET Products (Search) - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                products = response.json()
+                self.log_result("GET Products (Search)", True, f"Retrieved {len(products)} products for client-side filtering")
+            else:
+                self.log_result("GET Products (Search)", False, f"HTTP {response.status_code}: {response.text}")
+                return False
+            
+            # Test 2: GET /api/outlets - List outlets (frontend will filter client-side)
+            response = self.session.get(f"{BASE_URL}/outlets", headers=headers)
+            print_info(f"GET Outlets (Search) - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                outlets = response.json()
+                self.log_result("GET Outlets (Search)", True, f"Retrieved {len(outlets)} outlets for client-side filtering")
+            else:
+                self.log_result("GET Outlets (Search)", False, f"HTTP {response.status_code}: {response.text}")
+                return False
+            
+            # Test 3: GET /api/stock - List stock (frontend will filter client-side)
+            response = self.session.get(f"{BASE_URL}/stock", headers=headers)
+            print_info(f"GET Stock (Search) - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                stock = response.json()
+                self.log_result("GET Stock (Search)", True, f"Retrieved {len(stock)} stock records for client-side filtering")
+            else:
+                self.log_result("GET Stock (Search)", False, f"HTTP {response.status_code}: {response.text}")
+                return False
+            
+            self.log_result("Feature C Complete", True, "All Search functionality endpoints working")
+            return True
+            
+        except Exception as e:
+            self.log_result("Feature C", False, "Request failed", str(e))
+            return False
+
     def run_all_tests(self):
         """Run all authentication and CRUD tests"""
         print(f"{Colors.BOLD}FPO Management System - Authentication & CRUD Testing{Colors.ENDC}")
