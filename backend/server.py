@@ -943,12 +943,22 @@ async def get_stock(outlet_id: Optional[str] = None, current_user: dict = Depend
     
     stocks = await db.stock.find(query).to_list(1000)
     
-    # Enrich with product and outlet info
+    # Batch fetch products and outlets to avoid N+1 query problem
+    product_ids = list(set(s["product_id"] for s in stocks))
+    outlet_ids = list(set(s["outlet_id"] for s in stocks))
+    
+    products_list = await db.products.find({"id": {"$in": product_ids}}).to_list(1000)
+    outlets_list = await db.outlets.find({"id": {"$in": outlet_ids}}).to_list(1000)
+    
+    products_map = {p["id"]: p for p in products_list}
+    outlets_map = {o["id"]: o for o in outlets_list}
+    
+    # Enrich with product and outlet info using cached data
     result = []
     for s in stocks:
         s.pop('_id', None)  # Remove MongoDB _id
-        product = await db.products.find_one({"id": s["product_id"]})
-        outlet = await db.outlets.find_one({"id": s["outlet_id"]})
+        product = products_map.get(s["product_id"])
+        outlet = outlets_map.get(s["outlet_id"])
         result.append({
             **s,
             "product_name": product["name"] if product else "Unknown",
