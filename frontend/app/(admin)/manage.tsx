@@ -227,11 +227,19 @@ export default function ManageScreen() {
             Alert.alert(language === 'hi' ? 'त्रुटि' : 'Error', language === 'hi' ? 'विक्रेता का नाम आवश्यक है' : 'Vendor name is required');
             return;
           }
-          await api.post('/vendors', {
-            name: vendorName,
-            mobile: vendorMobile,
-            address: vendorAddress,
-          });
+          if (editItem) {
+            await api.put(`/vendors/${editItem.id}`, {
+              name: vendorName,
+              mobile: vendorMobile,
+              address: vendorAddress,
+            });
+          } else {
+            await api.post('/vendors', {
+              name: vendorName,
+              mobile: vendorMobile,
+              address: vendorAddress,
+            });
+          }
           break;
 
         case 'customers':
