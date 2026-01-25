@@ -1965,6 +1965,13 @@ class AuthTester:
             self.test_feature_c_search_functionality
         ]
         
+        # NEW REQUESTED FEATURES TESTS
+        requested_features_tests = [
+            self.test_notifications_system,
+            self.test_shareholder_upgrade_system,
+            self.test_vendor_procurement_system
+        ]
+        
         print(f"\n{Colors.BOLD}=== AUTHENTICATION TESTS ==={Colors.ENDC}")
         for test in auth_tests:
             try:
