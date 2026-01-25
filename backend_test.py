@@ -1277,6 +1277,10 @@ class AuthTester:
             self.test_farmer_purchases_with_jan_2026_filter
         ]
         
+        stock_transfer_tests = [
+            self.test_stock_transfer_system
+        ]
+        
         print(f"\n{Colors.BOLD}=== AUTHENTICATION TESTS ==={Colors.ENDC}")
         for test in auth_tests:
             try:
@@ -1297,6 +1301,15 @@ class AuthTester:
         
         print(f"\n{Colors.BOLD}=== DATE FILTERING TESTS ==={Colors.ENDC}")
         for test in date_filter_tests:
+            try:
+                test()
+            except Exception as e:
+                print_error(f"Test {test.__name__} crashed: {str(e)}")
+                self.test_results['failed'] += 1
+                self.test_results['errors'].append(f"{test.__name__}: Crashed - {str(e)}")
+        
+        print(f"\n{Colors.BOLD}=== STOCK TRANSFER REQUEST SYSTEM TESTS ==={Colors.ENDC}")
+        for test in stock_transfer_tests:
             try:
                 test()
             except Exception as e:
