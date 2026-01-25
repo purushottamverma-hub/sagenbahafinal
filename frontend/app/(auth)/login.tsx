@@ -52,14 +52,23 @@ export default function LoginScreen() {
     }
 
     setLoading(true);
+    console.log('[Login] Attempting login for user:', username.trim());
+    
     try {
       const response = await api.post('/auth/login', {
         username: username.trim(),
         password: password.trim(),
       });
 
+      console.log('[Login] Login successful, setting auth...');
       const { access_token, user } = response.data;
+      
+      // Set auth and wait for it to complete
       await setAuth(access_token, user);
+      console.log('[Login] Auth set complete, redirecting to:', user.role);
+
+      // Small delay to ensure state is fully updated
+      await new Promise(resolve => setTimeout(resolve, 100));
 
       // Redirect based on role
       if (user.role === 'admin') {
@@ -70,8 +79,19 @@ export default function LoginScreen() {
         router.replace('/(farmer)');
       }
     } catch (error: any) {
-      console.error('Login error:', error);
-      const message = error.response?.data?.detail || t('loginFailed');
+      console.error('[Login] Login error:', error);
+      console.error('[Login] Error response:', error.response?.data);
+      console.error('[Login] Error status:', error.response?.status);
+      
+      let message = t('loginFailed');
+      if (error.response?.data?.detail) {
+        message = error.response.data.detail;
+      } else if (error.message?.includes('Network')) {
+        message = language === 'hi' 
+          ? 'नेटवर्क त्रुटि। कृपया अपना कनेक्शन जांचें।' 
+          : 'Network error. Please check your connection.';
+      }
+      
       Alert.alert(t('error'), message);
     } finally {
       setLoading(false);
