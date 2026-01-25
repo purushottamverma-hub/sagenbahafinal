@@ -90,6 +90,15 @@ export default function AdminLayout() {
         }}
       />
       <Tabs.Screen
+        name="shareholders"
+        options={{
+          title: language === 'hi' ? 'शेयरधारक' : 'Shares',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="ribbon" size={size - 2} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="settings"
         options={{
           title: t('settings'),
