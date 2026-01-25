@@ -396,10 +396,16 @@ export default function ManageScreen() {
         <View style={styles.itemInfo}>
           <Text style={styles.itemName}>{item.name}</Text>
           {item.mobile && <Text style={styles.itemMeta}>{item.mobile}</Text>}
+          {item.address && <Text style={styles.itemMeta}>{item.address}</Text>}
         </View>
-        <TouchableOpacity onPress={() => handleDelete('vendors', item.id)} style={styles.actionBtn}>
-          <Ionicons name="trash" size={18} color="#D32F2F" />
-        </TouchableOpacity>
+        <View style={styles.itemActions}>
+          <TouchableOpacity onPress={() => handleEdit(item)} style={styles.actionBtn}>
+            <Ionicons name="pencil" size={18} color="#1976D2" />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => handleDelete('vendors', item.id)} style={styles.actionBtn}>
+            <Ionicons name="trash" size={18} color="#D32F2F" />
+          </TouchableOpacity>
+        </View>
       </View>
     </Card>
   );
