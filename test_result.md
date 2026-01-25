@@ -204,3 +204,12 @@ test_plan:
 agent_communication:
   - agent: "main"
     message: "Added Vendor CRUD endpoints to backend (POST/GET/PUT/DELETE /api/vendors). Updated admin layout to show 'Manage' tab. Verified all functionality via screenshots - vendors displaying correctly in UI."
+  - agent: "main"
+    message: "Phase 1 Auth Stability Improvements: 
+      1. Enhanced api.ts with robust backend URL detection (EXPO_PUBLIC_BACKEND_URL, expoConfig.extra.expoHostname, linkingUri fallbacks)
+      2. Added comprehensive logging to authStore.ts with retry logic for AsyncStorage operations
+      3. Updated app.json with proper app naming (FPO Manager) and expoHostname in extra config for APK builds
+      4. Improved login.tsx error handling with detailed error messages
+      5. Added verification for storage write operations
+      
+      Testing needed: Login flow on web and APK to verify auth stability"
