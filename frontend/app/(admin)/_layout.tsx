@@ -59,10 +59,7 @@ export default function AdminLayout() {
       <Tabs.Screen
         name="vendor-purchase"
         options={{
-          title: language === 'hi' ? 'विक्रेता' : 'Vendor',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="storefront" size={size - 2} color={color} />
-          ),
+          href: null, // Hide this tab - handled in purchase screen
         }}
       />
       <Tabs.Screen
