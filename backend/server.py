@@ -306,6 +306,55 @@ class Vendor(VendorBase):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
+# Vendor Procurement Model
+class VendorProcurementBase(BaseModel):
+    vendor_id: str
+    product_id: str
+    quantity: float
+    rate: float
+    outlet_id: str  # Stock will be added to this outlet
+    payment_mode: str = "cash"  # cash, online, credit
+    cash_amount: float = 0
+    online_amount: float = 0
+    notes: Optional[str] = None
+
+class VendorProcurement(VendorProcurementBase):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    receipt_number: str = ""
+    vendor_name: Optional[str] = None
+    product_name: Optional[str] = None
+    outlet_name: Optional[str] = None
+    total_amount: float = 0
+    credit_amount: float = 0
+    payment_status: str = "paid"  # paid or credit
+    created_by: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+# Notification Model
+class Notification(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str  # Target user (or 'all_admins', 'all_agents', etc.)
+    title: str
+    message: str
+    type: str  # 'request', 'approval', 'rejection', 'transfer', 'procurement', 'shareholder'
+    reference_type: Optional[str] = None  # 'product_request', 'stock_transfer', 'shareholder_upgrade'
+    reference_id: Optional[str] = None
+    is_read: bool = False
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+# Shareholder Upgrade Request Model
+class ShareholderUpgradeRequest(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    user_name: str
+    certificate_data: Optional[str] = None  # Base64 encoded certificate image
+    certificate_filename: Optional[str] = None
+    status: str = "pending"  # pending, approved, rejected
+    admin_remark: Optional[str] = None
+    approved_by: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
 class FarmerPurchaseBase(BaseModel):
     farmer_id: str
     farmer_name: Optional[str] = None
