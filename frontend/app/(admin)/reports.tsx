@@ -7,12 +7,15 @@ import {
   TouchableOpacity,
   Alert,
   Platform,
+  Modal,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
 import { Card } from '../../src/components/Card';
+import { Button } from '../../src/components/Button';
 import { useSettingsStore } from '../../src/store/settingsStore';
 import api from '../../src/utils/api';
 import * as XLSX from 'xlsx';
@@ -25,6 +28,7 @@ interface ReportOption {
   description: { en: string; hi: string };
   icon: string;
   color: string;
+  hasDateFilter: boolean;
 }
 
 const reportOptions: ReportOption[] = [
@@ -34,6 +38,7 @@ const reportOptions: ReportOption[] = [
     description: { en: 'All sales transactions', hi: 'सभी बिक्री लेनदेन' },
     icon: 'cart',
     color: '#2E7D32',
+    hasDateFilter: true,
   },
   {
     id: 'stock',
@@ -41,6 +46,7 @@ const reportOptions: ReportOption[] = [
     description: { en: 'Current inventory status', hi: 'वर्तमान स्टॉक स्थिति' },
     icon: 'cube',
     color: '#1976D2',
+    hasDateFilter: false,
   },
   {
     id: 'customers',
@@ -48,6 +54,7 @@ const reportOptions: ReportOption[] = [
     description: { en: 'Customer details and ledger', hi: 'ग्राहक विवरण और खाता' },
     icon: 'people',
     color: '#7B1FA2',
+    hasDateFilter: false,
   },
   {
     id: 'farmers',
@@ -55,6 +62,7 @@ const reportOptions: ReportOption[] = [
     description: { en: 'Farmer details and payments', hi: 'किसान विवरण और भुगतान' },
     icon: 'leaf',
     color: '#388E3C',
+    hasDateFilter: false,
   },
   {
     id: 'purchases',
@@ -62,14 +70,59 @@ const reportOptions: ReportOption[] = [
     description: { en: 'Farmer produce purchases', hi: 'किसानों से खरीद' },
     icon: 'basket',
     color: '#F57C00',
+    hasDateFilter: true,
   },
+];
+
+// Quick date filter options
+const datePresets = [
+  { id: 'today', label: { en: 'Today', hi: 'आज' } },
+  { id: 'yesterday', label: { en: 'Yesterday', hi: 'कल' } },
+  { id: 'week', label: { en: 'Last 7 Days', hi: 'पिछले 7 दिन' } },
+  { id: 'month', label: { en: 'This Month', hi: 'इस महीने' } },
+  { id: 'lastMonth', label: { en: 'Last Month', hi: 'पिछला महीना' } },
+  { id: 'custom', label: { en: 'Custom', hi: 'कस्टम' } },
 ];
 
 export default function ReportsScreen() {
   const [loading, setLoading] = useState<string | null>(null);
+  const [showDateModal, setShowDateModal] = useState(false);
+  const [selectedReport, setSelectedReport] = useState<ReportType | null>(null);
+  const [selectedPreset, setSelectedPreset] = useState('month');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const language = useSettingsStore((state) => state.language);
 
-  const generateExcel = async (data: any[], filename: string, headers: string[]) => {
+  const getDateRange = (preset: string): { start: string; end: string } => {
+    const today = new Date();
+    const formatDate = (d: Date) => d.toISOString().split('T')[0];
+    
+    switch (preset) {
+      case 'today':
+        return { start: formatDate(today), end: formatDate(today) };
+      case 'yesterday':
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+        return { start: formatDate(yesterday), end: formatDate(yesterday) };
+      case 'week':
+        const weekAgo = new Date(today);
+        weekAgo.setDate(weekAgo.getDate() - 7);
+        return { start: formatDate(weekAgo), end: formatDate(today) };
+      case 'month':
+        const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+        return { start: formatDate(monthStart), end: formatDate(today) };
+      case 'lastMonth':
+        const lastMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+        const lastMonthEnd = new Date(today.getFullYear(), today.getMonth(), 0);
+        return { start: formatDate(lastMonthStart), end: formatDate(lastMonthEnd) };
+      case 'custom':
+        return { start: startDate, end: endDate };
+      default:
+        return { start: '', end: '' };
+    }
+  };
+
+  const generateExcel = async (data: any[], filename: string) => {
     try {
       // Create worksheet
       const ws = XLSX.utils.json_to_sheet(data);
@@ -120,14 +173,39 @@ export default function ReportsScreen() {
     }
   };
 
-  const handleGenerateReport = async (reportType: ReportType) => {
+  const handleReportClick = (reportType: ReportType) => {
+    const report = reportOptions.find(r => r.id === reportType);
+    if (report?.hasDateFilter) {
+      setSelectedReport(reportType);
+      setShowDateModal(true);
+    } else {
+      handleGenerateReport(reportType);
+    }
+  };
+
+  const handleGenerateWithDates = () => {
+    if (selectedReport) {
+      setShowDateModal(false);
+      handleGenerateReport(selectedReport, getDateRange(selectedPreset));
+    }
+  };
+
+  const handleGenerateReport = async (reportType: ReportType, dateRange?: { start: string; end: string }) => {
     setLoading(reportType);
     
     try {
       switch (reportType) {
         case 'sales': {
-          const res = await api.get('/sales');
-          const data = res.data.map((sale: any) => ({
+          let url = '/sales';
+          const params = new URLSearchParams();
+          if (dateRange?.start) params.append('start_date', dateRange.start);
+          if (dateRange?.end) params.append('end_date', dateRange.end);
+          if (params.toString()) url += `?${params.toString()}`;
+          
+          const res = await api.get(url);
+          const salesData = Array.isArray(res.data) ? res.data : res.data.sales || [];
+          
+          const data = salesData.map((sale: any) => ({
             'Bill Number': sale.bill_number,
             'Date': new Date(sale.created_at).toLocaleDateString('en-IN'),
             'Customer': sale.customer_name || 'Walk-in',
@@ -139,13 +217,16 @@ export default function ReportsScreen() {
             'Credit (₹)': sale.credit_amount,
             'Payment Mode': sale.payment_mode,
           }));
-          await generateExcel(data, `Sales_Report_${Date.now()}`, []);
+          
+          const dateStr = dateRange?.start 
+            ? `${dateRange.start}_to_${dateRange.end}` 
+            : 'All';
+          await generateExcel(data, `Sales_Report_${dateStr}_${Date.now()}`);
           break;
         }
         
         case 'stock': {
           const res = await api.get('/stock');
-          const consolidated = await api.get('/stock/consolidated');
           
           const data = res.data.map((stock: any) => ({
             'Product': stock.product_name,
@@ -157,7 +238,7 @@ export default function ReportsScreen() {
             'Current Quantity': stock.quantity,
             'Unit': stock.product_unit,
           }));
-          await generateExcel(data, `Stock_Report_${Date.now()}`, []);
+          await generateExcel(data, `Stock_Report_${Date.now()}`);
           break;
         }
         
@@ -174,7 +255,7 @@ export default function ReportsScreen() {
               ? new Date(customer.last_purchase_date).toLocaleDateString('en-IN')
               : 'N/A',
           }));
-          await generateExcel(data, `Customer_Report_${Date.now()}`, []);
+          await generateExcel(data, `Customer_Report_${Date.now()}`);
           break;
         }
         
@@ -184,18 +265,28 @@ export default function ReportsScreen() {
             'Name': farmer.name,
             'Mobile': farmer.mobile || '',
             'Village': farmer.village || '',
+            'Member': farmer.is_member ? 'Yes' : 'No',
+            'Shareholder': farmer.is_shareholder ? 'Yes' : 'No',
             'Total Supplied (kg)': farmer.total_supplied || 0,
             'Total Payable (₹)': farmer.total_payable || 0,
             'Total Paid (₹)': farmer.total_paid || 0,
             'Outstanding Dues (₹)': farmer.outstanding_dues || 0,
           }));
-          await generateExcel(data, `Farmer_Report_${Date.now()}`, []);
+          await generateExcel(data, `Farmer_Report_${Date.now()}`);
           break;
         }
         
         case 'purchases': {
-          const res = await api.get('/farmer-purchases');
-          const data = res.data.map((purchase: any) => ({
+          let url = '/farmer-purchases';
+          const params = new URLSearchParams();
+          if (dateRange?.start) params.append('start_date', dateRange.start);
+          if (dateRange?.end) params.append('end_date', dateRange.end);
+          if (params.toString()) url += `?${params.toString()}`;
+          
+          const res = await api.get(url);
+          const purchasesData = Array.isArray(res.data) ? res.data : res.data.purchases || [];
+          
+          const data = purchasesData.map((purchase: any) => ({
             'Receipt Number': purchase.receipt_number,
             'Date': new Date(purchase.created_at).toLocaleDateString('en-IN'),
             'Farmer': purchase.farmer_name,
@@ -205,7 +296,11 @@ export default function ReportsScreen() {
             'Total Amount (₹)': purchase.total_amount,
             'Payment Status': purchase.payment_status === 'paid' ? 'Paid' : 'Credit',
           }));
-          await generateExcel(data, `Purchase_Report_${Date.now()}`, []);
+          
+          const dateStr = dateRange?.start 
+            ? `${dateRange.start}_to_${dateRange.end}` 
+            : 'All';
+          await generateExcel(data, `Purchase_Report_${dateStr}_${Date.now()}`);
           break;
         }
       }
@@ -218,6 +313,12 @@ export default function ReportsScreen() {
     } finally {
       setLoading(null);
     }
+  };
+
+  const formatDisplayDate = (dateStr: string) => {
+    if (!dateStr) return '';
+    const date = new Date(dateStr);
+    return date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
   };
 
   return (
@@ -237,7 +338,7 @@ export default function ReportsScreen() {
         {reportOptions.map((report) => (
           <TouchableOpacity
             key={report.id}
-            onPress={() => handleGenerateReport(report.id)}
+            onPress={() => handleReportClick(report.id)}
             disabled={loading !== null}
           >
             <Card style={styles.reportCard}>
@@ -251,6 +352,14 @@ export default function ReportsScreen() {
                 <Text style={styles.reportDesc}>
                   {report.description[language]}
                 </Text>
+                {report.hasDateFilter && (
+                  <View style={styles.dateFilterBadge}>
+                    <Ionicons name="calendar-outline" size={12} color="#1976D2" />
+                    <Text style={styles.dateFilterText}>
+                      {language === 'hi' ? 'तारीख फ़िल्टर' : 'Date Filter'}
+                    </Text>
+                  </View>
+                )}
               </View>
               <View style={styles.downloadBtn}>
                 {loading === report.id ? (
@@ -267,11 +376,99 @@ export default function ReportsScreen() {
           <Ionicons name="information-circle" size={20} color="#1976D2" />
           <Text style={styles.infoText}>
             {language === 'hi'
-              ? 'रिपोर्ट Excel (.xlsx) फॉर्मेट में डाउनलोड होगी। आप इसे Microsoft Excel, Google Sheets या किसी भी स्प्रेडशीट एप्लिकेशन में खोल सकते हैं।'
-              : 'Reports will be downloaded in Excel (.xlsx) format. You can open them in Microsoft Excel, Google Sheets, or any spreadsheet application.'}
+              ? 'रिपोर्ट Excel (.xlsx) फॉर्मेट में डाउनलोड होगी। Sales और Purchase रिपोर्ट में तारीख फ़िल्टर उपलब्ध है।'
+              : 'Reports download in Excel (.xlsx) format. Sales and Purchase reports support date filtering.'}
           </Text>
         </View>
       </ScrollView>
+
+      {/* Date Filter Modal */}
+      <Modal visible={showDateModal} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {language === 'hi' ? 'तारीख चुनें' : 'Select Date Range'}
+              </Text>
+              <TouchableOpacity onPress={() => setShowDateModal(false)}>
+                <Ionicons name="close" size={24} color="#666" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.sectionLabel}>
+              {language === 'hi' ? 'त्वरित विकल्प' : 'Quick Options'}
+            </Text>
+            <View style={styles.presetGrid}>
+              {datePresets.map((preset) => (
+                <TouchableOpacity
+                  key={preset.id}
+                  style={[
+                    styles.presetBtn,
+                    selectedPreset === preset.id && styles.presetBtnActive,
+                  ]}
+                  onPress={() => setSelectedPreset(preset.id)}
+                >
+                  <Text style={[
+                    styles.presetText,
+                    selectedPreset === preset.id && styles.presetTextActive,
+                  ]}>
+                    {preset.label[language]}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {selectedPreset === 'custom' && (
+              <View style={styles.customDateSection}>
+                <Text style={styles.sectionLabel}>
+                  {language === 'hi' ? 'कस्टम तारीख (YYYY-MM-DD)' : 'Custom Date (YYYY-MM-DD)'}
+                </Text>
+                <View style={styles.dateInputRow}>
+                  <View style={styles.dateInputContainer}>
+                    <Text style={styles.dateLabel}>
+                      {language === 'hi' ? 'से' : 'From'}
+                    </Text>
+                    <TextInput
+                      style={styles.dateInput}
+                      value={startDate}
+                      onChangeText={setStartDate}
+                      placeholder="2025-01-01"
+                      placeholderTextColor="#999"
+                    />
+                  </View>
+                  <View style={styles.dateInputContainer}>
+                    <Text style={styles.dateLabel}>
+                      {language === 'hi' ? 'तक' : 'To'}
+                    </Text>
+                    <TextInput
+                      style={styles.dateInput}
+                      value={endDate}
+                      onChangeText={setEndDate}
+                      placeholder="2025-01-31"
+                      placeholderTextColor="#999"
+                    />
+                  </View>
+                </View>
+              </View>
+            )}
+
+            {selectedPreset !== 'custom' && (
+              <View style={styles.selectedDateDisplay}>
+                <Ionicons name="calendar" size={18} color="#2E7D32" />
+                <Text style={styles.selectedDateText}>
+                  {formatDisplayDate(getDateRange(selectedPreset).start)} - {formatDisplayDate(getDateRange(selectedPreset).end)}
+                </Text>
+              </View>
+            )}
+
+            <Button
+              title={language === 'hi' ? 'रिपोर्ट डाउनलोड करें' : 'Download Report'}
+              onPress={handleGenerateWithDates}
+              style={styles.downloadButton}
+            />
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -325,6 +522,22 @@ const styles = StyleSheet.create({
     color: '#666',
     marginTop: 2,
   },
+  dateFilterBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E3F2FD',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    marginTop: 6,
+    alignSelf: 'flex-start',
+    gap: 4,
+  },
+  dateFilterText: {
+    fontSize: 11,
+    color: '#1976D2',
+    fontWeight: '500',
+  },
   downloadBtn: {
     width: 44,
     height: 44,
@@ -346,5 +559,101 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#1976D2',
     lineHeight: 18,
+  },
+  // Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: '#FFF',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    maxHeight: '70%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  sectionLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#666',
+    marginBottom: 12,
+  },
+  presetGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginBottom: 20,
+  },
+  presetBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#DDD',
+    backgroundColor: '#F9F9F9',
+  },
+  presetBtnActive: {
+    backgroundColor: '#2E7D32',
+    borderColor: '#2E7D32',
+  },
+  presetText: {
+    fontSize: 14,
+    color: '#666',
+  },
+  presetTextActive: {
+    color: '#FFF',
+    fontWeight: '600',
+  },
+  customDateSection: {
+    marginBottom: 20,
+  },
+  dateInputRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  dateInputContainer: {
+    flex: 1,
+  },
+  dateLabel: {
+    fontSize: 12,
+    color: '#666',
+    marginBottom: 6,
+  },
+  dateInput: {
+    borderWidth: 1,
+    borderColor: '#DDD',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    backgroundColor: '#F9F9F9',
+  },
+  selectedDateDisplay: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E8F5E9',
+    padding: 12,
+    borderRadius: 8,
+    gap: 10,
+    marginBottom: 20,
+  },
+  selectedDateText: {
+    fontSize: 14,
+    color: '#2E7D32',
+    fontWeight: '500',
+  },
+  downloadButton: {
+    marginTop: 10,
   },
 });
