@@ -484,7 +484,7 @@ export default function StockScreen() {
         <View style={styles.actionButtons}>
           <TouchableOpacity 
             style={[styles.actionBtn, styles.approveBtn]}
-            onPress={() => handleApproveSimple(item.id)}
+            onPress={() => handleApproveSimple(item)}
           >
             <Ionicons name="checkmark" size={18} color="#FFF" />
             <Text style={styles.actionBtnText}>{language === 'hi' ? 'अनुमोदित' : 'Approve'}</Text>
