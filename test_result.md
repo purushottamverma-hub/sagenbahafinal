@@ -188,6 +188,18 @@ backend:
         agent: "testing"
         comment: "Farmer Purchases API with date filtering tested successfully. All 2 test scenarios passed: 1) GET /api/farmer-purchases without filter - Retrieved 3 farmer purchase records. 2) GET /api/farmer-purchases with Jan 2026 filter - Retrieved 3 records, all from Jan 2026. Date filtering functionality working correctly for farmer purchases."
 
+  - task: "Stock Transfer Request System"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Stock Transfer Request System tested successfully. All 7 test scenarios passed: 1) Admin login with correct credentials (admin/admin123) works and returns proper token. 2) GET /api/products - Retrieved 5 products successfully. 3) GET /api/outlets - Retrieved 3 outlets successfully. 4) POST /api/stock/transfer-request - Created transfer request successfully with request ID. 5) GET /api/stock/transfer-requests - Retrieved all and pending requests correctly. 6) GET /api/stock/transfer-requests/pending-count - Retrieved pending count correctly. 7) PUT /api/stock/transfer-requests/{id}/approve - Approved request and transferred stock successfully. 8) PUT /api/stock/transfer-requests/{id}/reject - Rejected request successfully. All endpoints return proper HTTP 200 status codes, handle admin authentication correctly, and perform actual stock transfers. Complete stock transfer workflow is fully functional."
+
 frontend:
   - task: "Admin Management Screen (Outlets, Products, Vendors, Customers, Farmers)"
     implemented: true
