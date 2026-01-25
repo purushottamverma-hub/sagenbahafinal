@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
 FPO Management System - Backend API Testing
-Testing authentication endpoints, protected routes, and Admin CRUD operations
+Testing authentication endpoints, protected routes, Admin CRUD operations,
+and three new features:
+1. Agent Stock Transfer Request
+2. Farmer Product Requests  
+3. Search Functionality
 """
 
 import requests
