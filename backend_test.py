@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 FPO Management System - Backend API Testing
-Testing authentication endpoints and protected routes
+Testing authentication endpoints, protected routes, and Admin CRUD operations
 """
 
 import requests
