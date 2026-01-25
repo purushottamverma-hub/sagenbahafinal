@@ -187,6 +187,33 @@ class StockAddRequest(BaseModel):
     outlet_id: str
     quantity: float
 
+# Stock Transfer Request System
+class StockTransferRequestCreate(BaseModel):
+    product_id: str
+    from_outlet_id: str
+    to_outlet_id: str
+    quantity: float
+    reason: Optional[str] = None
+
+class StockTransferRequest(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    product_id: str
+    product_name: str
+    from_outlet_id: str
+    from_outlet_name: str
+    to_outlet_id: str
+    to_outlet_name: str
+    quantity: float
+    reason: Optional[str] = None
+    status: str = "pending"  # pending, approved, rejected
+    requested_by: str
+    requested_by_name: str
+    approved_by: Optional[str] = None
+    approved_by_name: Optional[str] = None
+    admin_remark: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
 class CustomerBase(BaseModel):
     name: str
     mobile: Optional[str] = None
