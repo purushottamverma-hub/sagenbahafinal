@@ -1224,4 +1224,35 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontWeight: '600',
   },
+  // Approval Modal Styles
+  approvalInfo: {
+    backgroundColor: '#F5F5F5',
+    padding: 14,
+    borderRadius: 10,
+    marginBottom: 16,
+  },
+  approvalProduct: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  requestedQtyLabel: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 12,
+    textAlign: 'center',
+  },
+  requestedQtyValue: {
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  quantityHint: {
+    fontSize: 12,
+    color: '#999',
+    fontStyle: 'italic',
+    marginTop: 4,
+    marginBottom: 8,
+  },
 });
