@@ -171,6 +171,22 @@ backend:
     stuck_count: 0
     priority: "high"
     needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Sales API with date filtering tested successfully. All 3 test scenarios passed: 1) GET /api/sales without filter - Retrieved 5 sales records. 2) GET /api/sales with Jan 2026 filter - Retrieved 5 records, all from Jan 2026. 3) GET /api/sales with 2020 filter - Retrieved 0 records (expected empty for 2020). Date filtering functionality working correctly."
+
+  - task: "Farmer Purchases API with date filtering"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Farmer Purchases API with date filtering tested successfully. All 2 test scenarios passed: 1) GET /api/farmer-purchases without filter - Retrieved 3 farmer purchase records. 2) GET /api/farmer-purchases with Jan 2026 filter - Retrieved 3 records, all from Jan 2026. Date filtering functionality working correctly for farmer purchases."
 
 frontend:
   - task: "Admin Management Screen (Outlets, Products, Vendors, Customers, Farmers)"
