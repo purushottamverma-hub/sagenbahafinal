@@ -317,6 +317,11 @@ class VendorProcurementBase(BaseModel):
     cash_amount: float = 0
     online_amount: float = 0
     notes: Optional[str] = None
+    # Manual entry fields for quick transactions
+    manual_vendor_name: Optional[str] = None
+    manual_vendor_mobile: Optional[str] = None
+    manual_product_name: Optional[str] = None
+    manual_product_unit: Optional[str] = None
 
 class VendorProcurement(VendorProcurementBase):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
