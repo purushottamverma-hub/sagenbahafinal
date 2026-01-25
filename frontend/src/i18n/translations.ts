@@ -38,12 +38,14 @@ export const translations = {
     dashboard: 'Dashboard',
     sales: 'Sales',
     stock: 'Stock',
+    purchase: 'Purchase',
     customers: 'Customers',
     farmers: 'Farmers',
     outlets: 'Outlets',
     products: 'Products',
     reports: 'Reports',
     settings: 'Settings',
+    notifications: 'Notifications',
     
     // Dashboard
     todaySales: "Today's Sales",
