@@ -9,6 +9,7 @@ import {
   Modal,
   Alert,
   ScrollView,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -26,6 +27,11 @@ interface Product {
   unit: string;
 }
 
+interface Outlet {
+  id: string;
+  name: string;
+}
+
 interface StockItem {
   id: string;
   product_id: string;
@@ -38,16 +44,34 @@ interface StockItem {
   stock_damaged: number;
 }
 
+interface TransferRequest {
+  id: string;
+  product_name: string;
+  from_outlet_name: string;
+  to_outlet_name: string;
+  quantity: number;
+  reason?: string;
+  status: string;
+  requested_by_name: string;
+  created_at: string;
+  admin_remark?: string;
+}
+
 export default function AgentStockScreen() {
   const { t, language } = useTranslation();
   const { user } = useAuthStore();
   const [stock, setStock] = useState<StockItem[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [outlets, setOutlets] = useState<Outlet[]>([]);
+  const [transferRequests, setTransferRequests] = useState<TransferRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showAddStock, setShowAddStock] = useState(false);
   const [showDamage, setShowDamage] = useState(false);
+  const [showTransferRequest, setShowTransferRequest] = useState(false);
+  const [showMyRequests, setShowMyRequests] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Form states
   const [addProduct, setAddProduct] = useState('');
@@ -56,17 +80,33 @@ export default function AgentStockScreen() {
   const [damageQuantity, setDamageQuantity] = useState('');
   const [damageReason, setDamageReason] = useState('');
 
+  // Transfer request form
+  const [transferProduct, setTransferProduct] = useState('');
+  const [transferFromOutlet, setTransferFromOutlet] = useState('');
+  const [transferQuantity, setTransferQuantity] = useState('');
+  const [transferReason, setTransferReason] = useState('');
+
   const fetchData = async () => {
     try {
-      const [stockRes, productsRes] = await Promise.all([
+      const [stockRes, productsRes, outletsRes] = await Promise.all([
         api.get('/stock'),
         api.get('/products'),
+        api.get('/outlets'),
       ]);
       setStock(stockRes.data);
       setProducts(productsRes.data);
+      setOutlets(outletsRes.data);
       if (productsRes.data.length > 0) {
         setAddProduct(productsRes.data[0].id);
         setDamageProduct(productsRes.data[0].id);
+        setTransferProduct(productsRes.data[0].id);
+      }
+      // Set default from outlet (any outlet that's not the agent's outlet)
+      if (outletsRes.data.length > 0 && user?.outlet_id) {
+        const otherOutlet = outletsRes.data.find((o: Outlet) => o.id !== user.outlet_id);
+        if (otherOutlet) {
+          setTransferFromOutlet(otherOutlet.id);
+        }
       }
     } catch (error) {
       console.error('Fetch error:', error);
@@ -76,14 +116,44 @@ export default function AgentStockScreen() {
     }
   };
 
+  const fetchMyRequests = async () => {
+    try {
+      const res = await api.get('/stock/transfer-requests');
+      setTransferRequests(res.data);
+    } catch (error) {
+      console.error('Fetch requests error:', error);
+    }
+  };
+
   useEffect(() => {
     fetchData();
   }, []);
+
+  useEffect(() => {
+    if (showMyRequests) {
+      fetchMyRequests();
+    }
+  }, [showMyRequests]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     fetchData();
   }, []);
+
+  // Filter products by search query
+  const filteredProducts = products.filter(p => {
+    if (!searchQuery.trim()) return true;
+    const query = searchQuery.toLowerCase();
+    return p.name.toLowerCase().includes(query) || 
+           (p.name_hi && p.name_hi.includes(searchQuery));
+  });
+
+  // Filter stock by search query
+  const filteredStock = stock.filter(s => {
+    if (!searchQuery.trim()) return true;
+    const query = searchQuery.toLowerCase();
+    return s.product_name.toLowerCase().includes(query);
+  });
 
   const handleAddStock = async () => {
     if (!addProduct || !addQuantity || !user?.outlet_id) {
@@ -135,6 +205,60 @@ export default function AgentStockScreen() {
     }
   };
 
+  const handleTransferRequest = async () => {
+    if (!transferProduct || !transferFromOutlet || !transferQuantity || !user?.outlet_id) {
+      Alert.alert(t('error'), language === 'hi' ? 'सभी फील्ड भरें' : 'Fill all fields');
+      return;
+    }
+
+    if (transferFromOutlet === user.outlet_id) {
+      Alert.alert(t('error'), language === 'hi' ? 'स्रोत आउटलेट अलग होना चाहिए' : 'Source outlet must be different from your outlet');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await api.post('/stock/transfer-request', {
+        product_id: transferProduct,
+        from_outlet_id: transferFromOutlet,
+        to_outlet_id: user.outlet_id,
+        quantity: parseFloat(transferQuantity),
+        reason: transferReason || null,
+      });
+      Alert.alert(
+        t('success'), 
+        language === 'hi' 
+          ? 'स्थानांतरण अनुरोध भेजा गया। एडमिन द्वारा अनुमोदन के बाद स्टॉक आएगा।' 
+          : 'Transfer request sent. Stock will be transferred after admin approval.'
+      );
+      setShowTransferRequest(false);
+      setTransferQuantity('');
+      setTransferReason('');
+    } catch (error: any) {
+      Alert.alert(t('error'), error.response?.data?.detail || 'Failed to create request');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'pending': return '#FFA000';
+      case 'approved': return '#4CAF50';
+      case 'rejected': return '#D32F2F';
+      default: return '#666';
+    }
+  };
+
+  const getStatusLabel = (status: string) => {
+    const labels: Record<string, { en: string; hi: string }> = {
+      pending: { en: 'Pending', hi: 'लंबित' },
+      approved: { en: 'Approved', hi: 'अनुमोदित' },
+      rejected: { en: 'Rejected', hi: 'अस्वीकृत' },
+    };
+    return labels[status]?.[language] || status;
+  };
+
   const renderStockItem = ({ item }: { item: StockItem }) => (
     <Card>
       <View style={styles.stockRow}>
@@ -173,6 +297,44 @@ export default function AgentStockScreen() {
     </Card>
   );
 
+  const renderTransferRequest = ({ item }: { item: TransferRequest }) => (
+    <Card style={styles.requestCard}>
+      <View style={styles.requestHeader}>
+        <View style={styles.requestInfo}>
+          <Text style={styles.requestProduct}>{item.product_name}</Text>
+          <Text style={styles.requestQty}>{item.quantity} units</Text>
+        </View>
+        <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.status) + '20' }]}>
+          <Text style={[styles.statusText, { color: getStatusColor(item.status) }]}>
+            {getStatusLabel(item.status)}
+          </Text>
+        </View>
+      </View>
+      
+      <View style={styles.transferFlow}>
+        <View style={styles.outletBox}>
+          <Text style={styles.outletLabel}>{language === 'hi' ? 'से' : 'From'}</Text>
+          <Text style={styles.outletText}>{item.from_outlet_name}</Text>
+        </View>
+        <Ionicons name="arrow-forward" size={20} color="#666" />
+        <View style={styles.outletBox}>
+          <Text style={styles.outletLabel}>{language === 'hi' ? 'को' : 'To'}</Text>
+          <Text style={styles.outletText}>{item.to_outlet_name}</Text>
+        </View>
+      </View>
+      
+      <Text style={styles.requestMeta}>
+        {new Date(item.created_at).toLocaleDateString('en-IN')}
+      </Text>
+      
+      {item.admin_remark && (
+        <Text style={styles.adminRemark}>
+          {language === 'hi' ? 'एडमिन टिप्पणी: ' : 'Admin Remark: '}{item.admin_remark}
+        </Text>
+      )}
+    </Card>
+  );
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
@@ -181,14 +343,37 @@ export default function AgentStockScreen() {
           <TouchableOpacity style={styles.iconBtn} onPress={() => setShowAddStock(true)}>
             <Ionicons name="add-circle" size={28} color="#2E7D32" />
           </TouchableOpacity>
+          <TouchableOpacity style={styles.iconBtn} onPress={() => setShowTransferRequest(true)}>
+            <Ionicons name="git-pull-request" size={28} color="#1976D2" />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.iconBtn} onPress={() => setShowMyRequests(true)}>
+            <Ionicons name="list" size={28} color="#7B1FA2" />
+          </TouchableOpacity>
           <TouchableOpacity style={styles.iconBtn} onPress={() => setShowDamage(true)}>
             <Ionicons name="warning" size={28} color="#D32F2F" />
           </TouchableOpacity>
         </View>
       </View>
 
+      {/* Search Bar */}
+      <View style={styles.searchContainer}>
+        <Ionicons name="search" size={20} color="#999" style={styles.searchIcon} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder={language === 'hi' ? 'उत्पाद खोजें...' : 'Search products...'}
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          placeholderTextColor="#999"
+        />
+        {searchQuery.length > 0 && (
+          <TouchableOpacity onPress={() => setSearchQuery('')}>
+            <Ionicons name="close-circle" size={20} color="#999" />
+          </TouchableOpacity>
+        )}
+      </View>
+
       <FlatList
-        data={stock}
+        data={filteredStock}
         renderItem={renderStockItem}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
@@ -199,7 +384,10 @@ export default function AgentStockScreen() {
           <View style={styles.empty}>
             <Ionicons name="cube-outline" size={48} color="#CCC" />
             <Text style={styles.emptyText}>
-              {language === 'hi' ? 'कोई स्टॉक नहीं' : 'No stock found'}
+              {searchQuery 
+                ? (language === 'hi' ? 'कोई परिणाम नहीं' : 'No results found')
+                : (language === 'hi' ? 'कोई स्टॉक नहीं' : 'No stock found')
+              }
             </Text>
           </View>
         }
@@ -213,7 +401,7 @@ export default function AgentStockScreen() {
             
             <Text style={styles.label}>{t('products')}</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.selectScroll}>
-              {products.map(p => (
+              {filteredProducts.map(p => (
                 <TouchableOpacity
                   key={p.id}
                   style={[styles.selectChip, addProduct === p.id && styles.selectChipActive]}
@@ -238,6 +426,118 @@ export default function AgentStockScreen() {
               <Button title={t('cancel')} variant="outline" onPress={() => setShowAddStock(false)} style={{ flex: 1, marginRight: 8 }} />
               <Button title={t('add')} onPress={handleAddStock} loading={submitting} style={{ flex: 1 }} />
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Request Stock Transfer Modal */}
+      <Modal visible={showTransferRequest} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {language === 'hi' ? 'स्टॉक अनुरोध' : 'Request Stock'}
+              </Text>
+              <TouchableOpacity onPress={() => setShowTransferRequest(false)}>
+                <Ionicons name="close" size={24} color="#666" />
+              </TouchableOpacity>
+            </View>
+            
+            <Text style={styles.label}>{t('products')}</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.selectScroll}>
+              {products.map(p => (
+                <TouchableOpacity
+                  key={p.id}
+                  style={[styles.selectChip, transferProduct === p.id && styles.selectChipActive]}
+                  onPress={() => setTransferProduct(p.id)}
+                >
+                  <Text style={[styles.selectText, transferProduct === p.id && styles.selectTextActive]}>
+                    {language === 'hi' && p.name_hi ? p.name_hi : p.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+
+            <Text style={styles.label}>
+              {language === 'hi' ? 'स्रोत आउटलेट (जहां से स्टॉक आएगा)' : 'Source Outlet (where stock comes from)'}
+            </Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.selectScroll}>
+              {outlets.filter(o => o.id !== user?.outlet_id).map(o => (
+                <TouchableOpacity
+                  key={o.id}
+                  style={[styles.selectChip, transferFromOutlet === o.id && styles.selectChipActive]}
+                  onPress={() => setTransferFromOutlet(o.id)}
+                >
+                  <Text style={[styles.selectText, transferFromOutlet === o.id && styles.selectTextActive]}>
+                    {o.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+
+            <View style={styles.destinationInfo}>
+              <Ionicons name="location" size={18} color="#2E7D32" />
+              <Text style={styles.destinationText}>
+                {language === 'hi' ? 'गंतव्य: आपका आउटलेट' : 'Destination: Your Outlet'}
+              </Text>
+            </View>
+
+            <Input
+              label={t('quantity')}
+              placeholder="0"
+              value={transferQuantity}
+              onChangeText={setTransferQuantity}
+              keyboardType="decimal-pad"
+            />
+
+            <Input
+              label={language === 'hi' ? 'कारण (वैकल्पिक)' : 'Reason (optional)'}
+              placeholder={language === 'hi' ? 'अनुरोध का कारण...' : 'Reason for request...'}
+              value={transferReason}
+              onChangeText={setTransferReason}
+              multiline
+            />
+
+            <View style={styles.modalButtons}>
+              <Button title={t('cancel')} variant="outline" onPress={() => setShowTransferRequest(false)} style={{ flex: 1, marginRight: 8 }} />
+              <Button 
+                title={language === 'hi' ? 'अनुरोध भेजें' : 'Send Request'} 
+                onPress={handleTransferRequest} 
+                loading={submitting} 
+                style={{ flex: 1 }} 
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* My Transfer Requests Modal */}
+      <Modal visible={showMyRequests} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalBox, { maxHeight: '85%' }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {language === 'hi' ? 'मेरे अनुरोध' : 'My Requests'}
+              </Text>
+              <TouchableOpacity onPress={() => setShowMyRequests(false)}>
+                <Ionicons name="close" size={24} color="#666" />
+              </TouchableOpacity>
+            </View>
+
+            <FlatList
+              data={transferRequests}
+              renderItem={renderTransferRequest}
+              keyExtractor={(item) => item.id}
+              contentContainerStyle={{ padding: 4 }}
+              ListEmptyComponent={
+                <View style={styles.empty}>
+                  <Ionicons name="git-pull-request-outline" size={48} color="#CCC" />
+                  <Text style={styles.emptyText}>
+                    {language === 'hi' ? 'कोई अनुरोध नहीं' : 'No requests found'}
+                  </Text>
+                </View>
+              }
+            />
           </View>
         </View>
       </Modal>
@@ -316,8 +616,29 @@ const styles = StyleSheet.create({
   iconBtn: {
     padding: 4,
   },
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF',
+    margin: 16,
+    marginBottom: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  searchIcon: {
+    marginRight: 10,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 16,
+    color: '#333',
+  },
   listContent: {
     padding: 16,
+    paddingTop: 8,
   },
   stockRow: {
     flexDirection: 'row',
@@ -385,12 +706,16 @@ const styles = StyleSheet.create({
     padding: 20,
     maxHeight: '80%',
   },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
   modalTitle: {
     fontSize: 20,
     fontWeight: 'bold',
     color: '#333',
-    marginBottom: 16,
-    textAlign: 'center',
   },
   label: {
     fontSize: 14,
@@ -422,5 +747,85 @@ const styles = StyleSheet.create({
   modalButtons: {
     flexDirection: 'row',
     marginTop: 20,
+  },
+  destinationInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E8F5E9',
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 8,
+    gap: 8,
+  },
+  destinationText: {
+    color: '#2E7D32',
+    fontWeight: '500',
+  },
+  // Request card styles
+  requestCard: {
+    marginBottom: 12,
+  },
+  requestHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+  },
+  requestInfo: {
+    flex: 1,
+  },
+  requestProduct: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+  },
+  requestQty: {
+    fontSize: 14,
+    color: '#2E7D32',
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  statusBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  transferFlow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F5F5F5',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 10,
+  },
+  outletBox: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  outletLabel: {
+    fontSize: 11,
+    color: '#999',
+    marginBottom: 2,
+  },
+  outletText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#333',
+    textAlign: 'center',
+  },
+  requestMeta: {
+    fontSize: 12,
+    color: '#666',
+  },
+  adminRemark: {
+    fontSize: 12,
+    color: '#1976D2',
+    marginTop: 4,
+    fontWeight: '500',
   },
 });
