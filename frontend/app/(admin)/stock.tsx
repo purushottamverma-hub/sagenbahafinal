@@ -9,6 +9,7 @@ import {
   Modal,
   Alert,
   FlatList,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -51,19 +52,36 @@ interface ConsolidatedStock {
   total_quantity: number;
 }
 
+interface TransferRequest {
+  id: string;
+  product_name: string;
+  from_outlet_name: string;
+  to_outlet_name: string;
+  quantity: number;
+  reason?: string;
+  status: string;
+  requested_by_name: string;
+  created_at: string;
+  admin_remark?: string;
+}
+
 export default function StockScreen() {
   const { t, language } = useTranslation();
   const [stock, setStock] = useState<StockItem[]>([]);
   const [consolidatedStock, setConsolidatedStock] = useState<ConsolidatedStock[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [outlets, setOutlets] = useState<Outlet[]>([]);
+  const [transferRequests, setTransferRequests] = useState<TransferRequest[]>([]);
+  const [pendingCount, setPendingCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedOutlet, setSelectedOutlet] = useState<string>('all');
   const [showAddStock, setShowAddStock] = useState(false);
   const [showAllocate, setShowAllocate] = useState(false);
   const [showDamage, setShowDamage] = useState(false);
+  const [showTransferRequests, setShowTransferRequests] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [activeRequestTab, setActiveRequestTab] = useState<'pending' | 'all'>('pending');
 
   // Form states
   const [addProduct, setAddProduct] = useState('');
@@ -80,18 +98,24 @@ export default function StockScreen() {
   const [damageQuantity, setDamageQuantity] = useState('');
   const [damageReason, setDamageReason] = useState('');
 
+  // Remark for approval/rejection
+  const [adminRemark, setAdminRemark] = useState('');
+
   const fetchData = async () => {
     try {
-      const [stockRes, consolidatedRes, productsRes, outletsRes] = await Promise.all([
+      const [stockRes, consolidatedRes, productsRes, outletsRes, pendingRes] = await Promise.all([
         api.get('/stock'),
         api.get('/stock/consolidated'),
         api.get('/products'),
         api.get('/outlets'),
+        api.get('/stock/transfer-requests/pending-count'),
       ]);
       setStock(stockRes.data);
       setConsolidatedStock(consolidatedRes.data);
       setProducts(productsRes.data);
       setOutlets(outletsRes.data);
+      setPendingCount(pendingRes.data.count || 0);
+      
       if (outletsRes.data.length > 0) {
         setAddOutlet(outletsRes.data[0].id);
         setFromOutlet(outletsRes.data[0].id);
@@ -113,9 +137,25 @@ export default function StockScreen() {
     }
   };
 
+  const fetchTransferRequests = async (status?: string) => {
+    try {
+      const url = status ? `/stock/transfer-requests?status=${status}` : '/stock/transfer-requests';
+      const res = await api.get(url);
+      setTransferRequests(res.data);
+    } catch (error) {
+      console.error('Fetch transfer requests error:', error);
+    }
+  };
+
   useEffect(() => {
     fetchData();
   }, []);
+
+  useEffect(() => {
+    if (showTransferRequests) {
+      fetchTransferRequests(activeRequestTab === 'pending' ? 'pending' : undefined);
+    }
+  }, [showTransferRequests, activeRequestTab]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -206,6 +246,135 @@ export default function StockScreen() {
     }
   };
 
+  const handleApproveRequest = async (requestId: string) => {
+    Alert.prompt(
+      language === 'hi' ? 'अनुमोदन टिप्पणी' : 'Approval Remark',
+      language === 'hi' ? 'वैकल्पिक टिप्पणी दर्ज करें' : 'Enter optional remark',
+      [
+        { text: language === 'hi' ? 'रद्द करें' : 'Cancel', style: 'cancel' },
+        {
+          text: language === 'hi' ? 'अनुमोदित करें' : 'Approve',
+          onPress: async (remark) => {
+            setSubmitting(true);
+            try {
+              await api.put(`/stock/transfer-requests/${requestId}/approve${remark ? `?remark=${encodeURIComponent(remark)}` : ''}`);
+              Alert.alert(t('success'), language === 'hi' ? 'अनुरोध अनुमोदित और स्टॉक स्थानांतरित' : 'Request approved and stock transferred');
+              fetchTransferRequests(activeRequestTab === 'pending' ? 'pending' : undefined);
+              fetchData();
+            } catch (error: any) {
+              Alert.alert(t('error'), error.response?.data?.detail || 'Failed to approve');
+            } finally {
+              setSubmitting(false);
+            }
+          },
+        },
+      ],
+      'plain-text',
+      ''
+    );
+  };
+
+  const handleRejectRequest = async (requestId: string) => {
+    Alert.prompt(
+      language === 'hi' ? 'अस्वीकृति कारण' : 'Rejection Reason',
+      language === 'hi' ? 'कारण दर्ज करें' : 'Enter reason for rejection',
+      [
+        { text: language === 'hi' ? 'रद्द करें' : 'Cancel', style: 'cancel' },
+        {
+          text: language === 'hi' ? 'अस्वीकार करें' : 'Reject',
+          style: 'destructive',
+          onPress: async (remark) => {
+            setSubmitting(true);
+            try {
+              await api.put(`/stock/transfer-requests/${requestId}/reject?remark=${encodeURIComponent(remark || 'Rejected by admin')}`);
+              Alert.alert(t('success'), language === 'hi' ? 'अनुरोध अस्वीकृत' : 'Request rejected');
+              fetchTransferRequests(activeRequestTab === 'pending' ? 'pending' : undefined);
+              fetchData();
+            } catch (error: any) {
+              Alert.alert(t('error'), error.response?.data?.detail || 'Failed to reject');
+            } finally {
+              setSubmitting(false);
+            }
+          },
+        },
+      ],
+      'plain-text',
+      ''
+    );
+  };
+
+  // Fallback for platforms that don't support Alert.prompt
+  const handleApproveSimple = async (requestId: string) => {
+    Alert.alert(
+      language === 'hi' ? 'स्थानांतरण अनुमोदित करें?' : 'Approve Transfer?',
+      language === 'hi' ? 'क्या आप इस स्थानांतरण अनुरोध को अनुमोदित करना चाहते हैं?' : 'Do you want to approve this transfer request?',
+      [
+        { text: language === 'hi' ? 'रद्द करें' : 'Cancel', style: 'cancel' },
+        {
+          text: language === 'hi' ? 'अनुमोदित करें' : 'Approve',
+          onPress: async () => {
+            setSubmitting(true);
+            try {
+              await api.put(`/stock/transfer-requests/${requestId}/approve`);
+              Alert.alert(t('success'), language === 'hi' ? 'अनुरोध अनुमोदित और स्टॉक स्थानांतरित' : 'Request approved and stock transferred');
+              fetchTransferRequests(activeRequestTab === 'pending' ? 'pending' : undefined);
+              fetchData();
+            } catch (error: any) {
+              Alert.alert(t('error'), error.response?.data?.detail || 'Failed to approve');
+            } finally {
+              setSubmitting(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleRejectSimple = async (requestId: string) => {
+    Alert.alert(
+      language === 'hi' ? 'स्थानांतरण अस्वीकार करें?' : 'Reject Transfer?',
+      language === 'hi' ? 'क्या आप इस स्थानांतरण अनुरोध को अस्वीकार करना चाहते हैं?' : 'Do you want to reject this transfer request?',
+      [
+        { text: language === 'hi' ? 'रद्द करें' : 'Cancel', style: 'cancel' },
+        {
+          text: language === 'hi' ? 'अस्वीकार करें' : 'Reject',
+          style: 'destructive',
+          onPress: async () => {
+            setSubmitting(true);
+            try {
+              await api.put(`/stock/transfer-requests/${requestId}/reject?remark=Rejected`);
+              Alert.alert(t('success'), language === 'hi' ? 'अनुरोध अस्वीकृत' : 'Request rejected');
+              fetchTransferRequests(activeRequestTab === 'pending' ? 'pending' : undefined);
+              fetchData();
+            } catch (error: any) {
+              Alert.alert(t('error'), error.response?.data?.detail || 'Failed to reject');
+            } finally {
+              setSubmitting(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'pending': return '#FFA000';
+      case 'approved': return '#4CAF50';
+      case 'rejected': return '#D32F2F';
+      default: return '#666';
+    }
+  };
+
+  const getStatusLabel = (status: string) => {
+    const labels: Record<string, { en: string; hi: string }> = {
+      pending: { en: 'Pending', hi: 'लंबित' },
+      approved: { en: 'Approved', hi: 'अनुमोदित' },
+      rejected: { en: 'Rejected', hi: 'अस्वीकृत' },
+    };
+    return labels[status]?.[language] || status;
+  };
+
   const renderStockItem = ({ item }: { item: StockItem }) => (
     <Card>
       <View style={styles.stockRow}>
@@ -245,6 +414,69 @@ export default function StockScreen() {
     </Card>
   );
 
+  const renderTransferRequest = ({ item }: { item: TransferRequest }) => (
+    <Card style={styles.requestCard}>
+      <View style={styles.requestHeader}>
+        <View style={styles.requestInfo}>
+          <Text style={styles.requestProduct}>{item.product_name}</Text>
+          <Text style={styles.requestQty}>{item.quantity} units</Text>
+        </View>
+        <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.status) + '20' }]}>
+          <Text style={[styles.statusText, { color: getStatusColor(item.status) }]}>
+            {getStatusLabel(item.status)}
+          </Text>
+        </View>
+      </View>
+      
+      <View style={styles.transferFlow}>
+        <View style={styles.outletBox}>
+          <Text style={styles.outletLabel}>{language === 'hi' ? 'से' : 'From'}</Text>
+          <Text style={styles.outletText}>{item.from_outlet_name}</Text>
+        </View>
+        <Ionicons name="arrow-forward" size={20} color="#666" />
+        <View style={styles.outletBox}>
+          <Text style={styles.outletLabel}>{language === 'hi' ? 'को' : 'To'}</Text>
+          <Text style={styles.outletText}>{item.to_outlet_name}</Text>
+        </View>
+      </View>
+      
+      <Text style={styles.requestMeta}>
+        {language === 'hi' ? 'द्वारा: ' : 'By: '}{item.requested_by_name} • {new Date(item.created_at).toLocaleDateString('en-IN')}
+      </Text>
+      
+      {item.reason && (
+        <Text style={styles.requestReason}>
+          {language === 'hi' ? 'कारण: ' : 'Reason: '}{item.reason}
+        </Text>
+      )}
+      
+      {item.admin_remark && (
+        <Text style={styles.adminRemark}>
+          {language === 'hi' ? 'एडमिन टिप्पणी: ' : 'Admin Remark: '}{item.admin_remark}
+        </Text>
+      )}
+      
+      {item.status === 'pending' && (
+        <View style={styles.actionButtons}>
+          <TouchableOpacity 
+            style={[styles.actionBtn, styles.approveBtn]}
+            onPress={() => handleApproveSimple(item.id)}
+          >
+            <Ionicons name="checkmark" size={18} color="#FFF" />
+            <Text style={styles.actionBtnText}>{language === 'hi' ? 'अनुमोदित' : 'Approve'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={[styles.actionBtn, styles.rejectBtn]}
+            onPress={() => handleRejectSimple(item.id)}
+          >
+            <Ionicons name="close" size={18} color="#FFF" />
+            <Text style={styles.actionBtnText}>{language === 'hi' ? 'अस्वीकार' : 'Reject'}</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+    </Card>
+  );
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
@@ -258,6 +490,17 @@ export default function StockScreen() {
           </TouchableOpacity>
           <TouchableOpacity style={styles.iconBtn} onPress={() => setShowDamage(true)}>
             <Ionicons name="warning" size={28} color="#D32F2F" />
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={styles.iconBtn} 
+            onPress={() => setShowTransferRequests(true)}
+          >
+            <Ionicons name="git-pull-request" size={28} color="#7B1FA2" />
+            {pendingCount > 0 && (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>{pendingCount}</Text>
+              </View>
+            )}
           </TouchableOpacity>
         </View>
       </View>
@@ -374,7 +617,7 @@ export default function StockScreen() {
         </View>
       </Modal>
 
-      {/* Allocate Stock Modal */}
+      {/* Allocate Stock Modal (Direct Admin Transfer) */}
       <Modal visible={showAllocate} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalBox}>
@@ -500,6 +743,57 @@ export default function StockScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Transfer Requests Modal */}
+      <Modal visible={showTransferRequests} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalBox, { maxHeight: '85%' }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {language === 'hi' ? 'स्थानांतरण अनुरोध' : 'Transfer Requests'}
+              </Text>
+              <TouchableOpacity onPress={() => setShowTransferRequests(false)}>
+                <Ionicons name="close" size={24} color="#666" />
+              </TouchableOpacity>
+            </View>
+            
+            <View style={styles.tabBar}>
+              <TouchableOpacity 
+                style={[styles.tab, activeRequestTab === 'pending' && styles.tabActive]}
+                onPress={() => setActiveRequestTab('pending')}
+              >
+                <Text style={[styles.tabText, activeRequestTab === 'pending' && styles.tabTextActive]}>
+                  {language === 'hi' ? 'लंबित' : 'Pending'}
+                  {pendingCount > 0 && ` (${pendingCount})`}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.tab, activeRequestTab === 'all' && styles.tabActive]}
+                onPress={() => setActiveRequestTab('all')}
+              >
+                <Text style={[styles.tabText, activeRequestTab === 'all' && styles.tabTextActive]}>
+                  {language === 'hi' ? 'सभी' : 'All'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <FlatList
+              data={transferRequests}
+              renderItem={renderTransferRequest}
+              keyExtractor={(item) => item.id}
+              contentContainerStyle={{ padding: 4 }}
+              ListEmptyComponent={
+                <View style={styles.empty}>
+                  <Ionicons name="git-pull-request-outline" size={48} color="#CCC" />
+                  <Text style={styles.emptyText}>
+                    {language === 'hi' ? 'कोई अनुरोध नहीं' : 'No requests found'}
+                  </Text>
+                </View>
+              }
+            />
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -529,6 +823,23 @@ const styles = StyleSheet.create({
   },
   iconBtn: {
     padding: 4,
+    position: 'relative',
+  },
+  badge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    backgroundColor: '#D32F2F',
+    borderRadius: 10,
+    minWidth: 18,
+    height: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  badgeText: {
+    color: '#FFF',
+    fontSize: 11,
+    fontWeight: 'bold',
   },
   filterScroll: {
     backgroundColor: '#FFF',
@@ -652,12 +963,16 @@ const styles = StyleSheet.create({
     padding: 20,
     maxHeight: '80%',
   },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
   modalTitle: {
     fontSize: 20,
     fontWeight: 'bold',
     color: '#333',
-    marginBottom: 16,
-    textAlign: 'center',
   },
   label: {
     fontSize: 14,
@@ -689,5 +1004,126 @@ const styles = StyleSheet.create({
   modalButtons: {
     flexDirection: 'row',
     marginTop: 20,
+  },
+  // Transfer Request Styles
+  tabBar: {
+    flexDirection: 'row',
+    marginBottom: 16,
+    borderRadius: 8,
+    backgroundColor: '#E8E8E8',
+    padding: 4,
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderRadius: 6,
+  },
+  tabActive: {
+    backgroundColor: '#FFF',
+  },
+  tabText: {
+    color: '#666',
+    fontWeight: '500',
+  },
+  tabTextActive: {
+    color: '#2E7D32',
+    fontWeight: '600',
+  },
+  requestCard: {
+    marginBottom: 12,
+  },
+  requestHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+  },
+  requestInfo: {
+    flex: 1,
+  },
+  requestProduct: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+  },
+  requestQty: {
+    fontSize: 14,
+    color: '#2E7D32',
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  statusBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  transferFlow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F5F5F5',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 10,
+  },
+  outletBox: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  outletLabel: {
+    fontSize: 11,
+    color: '#999',
+    marginBottom: 2,
+  },
+  outletText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#333',
+    textAlign: 'center',
+  },
+  requestMeta: {
+    fontSize: 12,
+    color: '#666',
+  },
+  requestReason: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+  adminRemark: {
+    fontSize: 12,
+    color: '#1976D2',
+    marginTop: 4,
+    fontWeight: '500',
+  },
+  actionButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 12,
+  },
+  actionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: 8,
+    gap: 6,
+  },
+  approveBtn: {
+    backgroundColor: '#4CAF50',
+  },
+  rejectBtn: {
+    backgroundColor: '#D32F2F',
+  },
+  actionBtnText: {
+    color: '#FFF',
+    fontWeight: '600',
   },
 });
