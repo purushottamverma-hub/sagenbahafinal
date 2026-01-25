@@ -98,6 +98,12 @@ export default function StockScreen() {
   const [damageQuantity, setDamageQuantity] = useState('');
   const [damageReason, setDamageReason] = useState('');
 
+  // Approval modal states
+  const [showApprovalModal, setShowApprovalModal] = useState(false);
+  const [approvalRequest, setApprovalRequest] = useState<TransferRequest | null>(null);
+  const [approvalQuantity, setApprovalQuantity] = useState('');
+  const [approvalRemark, setApprovalRemark] = useState('');
+
   // Remark for approval/rejection
   const [adminRemark, setAdminRemark] = useState('');
 
