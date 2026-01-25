@@ -1,5 +1,5 @@
 import React from 'react';
-import { TouchableOpacity, Text, StyleSheet, ActivityIndicator, ViewStyle, TextStyle } from 'react-native';
+import { Pressable, Text, StyleSheet, ActivityIndicator, ViewStyle, TextStyle, Platform } from 'react-native';
 
 interface ButtonProps {
   title: string;
@@ -58,18 +58,29 @@ export const Button: React.FC<ButtonProps> = ({
     }
   };
 
+  const handlePress = () => {
+    if (!disabled && !loading) {
+      onPress();
+    }
+  };
+
   return (
-    <TouchableOpacity
-      style={[
+    <Pressable
+      style={({ pressed }) => [
         styles.button,
         { backgroundColor: getBackgroundColor() },
         getPadding(),
         variant === 'outline' && styles.outline,
+        pressed && !disabled && { opacity: 0.7 },
         style,
       ]}
-      onPress={onPress}
+      onPress={handlePress}
       disabled={disabled || loading}
-      activeOpacity={0.7}
+      // Web-specific accessibility improvements
+      {...(Platform.OS === 'web' ? { 
+        role: 'button',
+        'aria-disabled': disabled || loading,
+      } : {})}
     >
       {loading ? (
         <ActivityIndicator color={getTextColor()} />
@@ -86,7 +97,7 @@ export const Button: React.FC<ButtonProps> = ({
           </Text>
         </>
       )}
-    </TouchableOpacity>
+    </Pressable>
   );
 };
 
