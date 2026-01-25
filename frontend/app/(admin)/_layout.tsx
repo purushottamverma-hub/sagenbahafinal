@@ -95,7 +95,10 @@ export default function AdminLayout() {
       <Tabs.Screen
         name="manage"
         options={{
-          href: null, // Hide from tab bar but still accessible
+          title: language === 'hi' ? 'प्रबंधन' : 'Manage',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="construct" size={size - 2} color={color} />
+          ),
         }}
       />
     </Tabs>
