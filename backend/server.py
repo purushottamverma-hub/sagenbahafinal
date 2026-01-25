@@ -102,6 +102,8 @@ class ProductRequestBase(BaseModel):
     request_type: str  # buy or sell
     preferred_rate: Optional[float] = None
     notes: Optional[str] = None
+    outlet_id: Optional[str] = None
+    custom_product_name: Optional[str] = None  # For sell requests with custom products
 
 class ProductRequest(ProductRequestBase):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
