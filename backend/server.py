@@ -2043,6 +2043,351 @@ async def export_sales_report(
         headers={"Content-Disposition": "attachment; filename=sales_report.xlsx"}
     )
 
+# ===================== NOTIFICATIONS =====================
+
+async def create_notification(user_id: str, title: str, message: str, notif_type: str, ref_type: str = None, ref_id: str = None):
+    """Helper function to create notifications"""
+    notification = Notification(
+        user_id=user_id,
+        title=title,
+        message=message,
+        type=notif_type,
+        reference_type=ref_type,
+        reference_id=ref_id
+    )
+    await db.notifications.insert_one(notification.dict())
+    return notification
+
+async def notify_admins(title: str, message: str, notif_type: str, ref_type: str = None, ref_id: str = None):
+    """Send notification to all admins"""
+    admins = await db.users.find({"role": "admin", "is_active": True}).to_list(100)
+    for admin in admins:
+        await create_notification(admin["id"], title, message, notif_type, ref_type, ref_id)
+
+async def notify_outlet_agents(outlet_id: str, title: str, message: str, notif_type: str, ref_type: str = None, ref_id: str = None):
+    """Send notification to agents of a specific outlet"""
+    agents = await db.users.find({"role": "agent", "outlet_id": outlet_id, "is_active": True}).to_list(100)
+    for agent in agents:
+        await create_notification(agent["id"], title, message, notif_type, ref_type, ref_id)
+
+@api_router.get("/notifications")
+async def get_notifications(unread_only: bool = False, current_user: dict = Depends(get_current_user)):
+    """Get notifications for current user"""
+    query = {"user_id": current_user["id"]}
+    if unread_only:
+        query["is_read"] = False
+    
+    notifications = await db.notifications.find(query).sort("created_at", -1).to_list(100)
+    result = []
+    for n in notifications:
+        n.pop('_id', None)
+        result.append(n)
+    return result
+
+@api_router.get("/notifications/unread-count")
+async def get_unread_count(current_user: dict = Depends(get_current_user)):
+    """Get count of unread notifications"""
+    count = await db.notifications.count_documents({"user_id": current_user["id"], "is_read": False})
+    return {"count": count}
+
+@api_router.put("/notifications/{notification_id}/read")
+async def mark_notification_read(notification_id: str, current_user: dict = Depends(get_current_user)):
+    """Mark a notification as read"""
+    result = await db.notifications.update_one(
+        {"id": notification_id, "user_id": current_user["id"]},
+        {"$set": {"is_read": True}}
+    )
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return {"message": "Notification marked as read"}
+
+@api_router.put("/notifications/mark-all-read")
+async def mark_all_notifications_read(current_user: dict = Depends(get_current_user)):
+    """Mark all notifications as read"""
+    await db.notifications.update_many(
+        {"user_id": current_user["id"], "is_read": False},
+        {"$set": {"is_read": True}}
+    )
+    return {"message": "All notifications marked as read"}
+
+# ===================== SHAREHOLDER UPGRADE =====================
+
+@api_router.post("/shareholder-upgrade/request")
+async def request_shareholder_upgrade(
+    certificate_data: Optional[str] = None,
+    certificate_filename: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Request upgrade to shareholder status"""
+    if current_user["role"] != "farmer":
+        raise HTTPException(status_code=403, detail="Only farmers can request shareholder upgrade")
+    
+    # Check if already a shareholder
+    user = await db.users.find_one({"id": current_user["id"]})
+    if user and user.get("is_shareholder"):
+        raise HTTPException(status_code=400, detail="You are already a shareholder")
+    
+    # Check if there's a pending request
+    existing = await db.shareholder_upgrades.find_one({
+        "user_id": current_user["id"],
+        "status": "pending"
+    })
+    if existing:
+        raise HTTPException(status_code=400, detail="You already have a pending upgrade request")
+    
+    upgrade_request = ShareholderUpgradeRequest(
+        user_id=current_user["id"],
+        user_name=current_user.get("full_name", current_user.get("username")),
+        certificate_data=certificate_data,
+        certificate_filename=certificate_filename,
+        status="pending"
+    )
+    
+    await db.shareholder_upgrades.insert_one(upgrade_request.dict())
+    
+    # Notify admins
+    await notify_admins(
+        title="Shareholder Upgrade Request",
+        message=f"{upgrade_request.user_name} has requested shareholder upgrade",
+        notif_type="shareholder",
+        ref_type="shareholder_upgrade",
+        ref_id=upgrade_request.id
+    )
+    
+    return {"message": "Upgrade request submitted successfully", "request_id": upgrade_request.id}
+
+@api_router.get("/shareholder-upgrade/requests")
+async def get_shareholder_requests(status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Get shareholder upgrade requests - Admin sees all, farmers see their own"""
+    query = {}
+    
+    if current_user["role"] == "farmer":
+        query["user_id"] = current_user["id"]
+    elif current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    if status:
+        query["status"] = status
+    
+    requests = await db.shareholder_upgrades.find(query).sort("created_at", -1).to_list(100)
+    result = []
+    for r in requests:
+        r.pop('_id', None)
+        result.append(r)
+    return result
+
+@api_router.get("/shareholder-upgrade/pending-count")
+async def get_pending_shareholder_count(current_user: dict = Depends(require_admin)):
+    """Get count of pending shareholder requests"""
+    count = await db.shareholder_upgrades.count_documents({"status": "pending"})
+    return {"count": count}
+
+@api_router.put("/shareholder-upgrade/{request_id}/approve")
+async def approve_shareholder_upgrade(request_id: str, remark: Optional[str] = None, current_user: dict = Depends(require_admin)):
+    """Approve a shareholder upgrade request"""
+    upgrade = await db.shareholder_upgrades.find_one({"id": request_id})
+    if not upgrade:
+        raise HTTPException(status_code=404, detail="Request not found")
+    
+    if upgrade["status"] != "pending":
+        raise HTTPException(status_code=400, detail="Request already processed")
+    
+    # Update the upgrade request
+    await db.shareholder_upgrades.update_one(
+        {"id": request_id},
+        {"$set": {
+            "status": "approved",
+            "approved_by": current_user["id"],
+            "admin_remark": remark,
+            "updated_at": datetime.utcnow()
+        }}
+    )
+    
+    # Update the user to be a shareholder
+    await db.users.update_one(
+        {"id": upgrade["user_id"]},
+        {"$set": {"is_shareholder": True, "updated_at": datetime.utcnow()}}
+    )
+    
+    # Notify the farmer
+    await create_notification(
+        upgrade["user_id"],
+        "Shareholder Status Approved!",
+        "Congratulations! Your shareholder upgrade request has been approved.",
+        "shareholder",
+        "shareholder_upgrade",
+        request_id
+    )
+    
+    return {"message": "Shareholder upgrade approved"}
+
+@api_router.put("/shareholder-upgrade/{request_id}/reject")
+async def reject_shareholder_upgrade(request_id: str, remark: str = "Request rejected", current_user: dict = Depends(require_admin)):
+    """Reject a shareholder upgrade request"""
+    upgrade = await db.shareholder_upgrades.find_one({"id": request_id})
+    if not upgrade:
+        raise HTTPException(status_code=404, detail="Request not found")
+    
+    if upgrade["status"] != "pending":
+        raise HTTPException(status_code=400, detail="Request already processed")
+    
+    await db.shareholder_upgrades.update_one(
+        {"id": request_id},
+        {"$set": {
+            "status": "rejected",
+            "approved_by": current_user["id"],
+            "admin_remark": remark,
+            "updated_at": datetime.utcnow()
+        }}
+    )
+    
+    # Notify the farmer
+    await create_notification(
+        upgrade["user_id"],
+        "Shareholder Request Rejected",
+        f"Your shareholder upgrade request was rejected. Reason: {remark}",
+        "shareholder",
+        "shareholder_upgrade",
+        request_id
+    )
+    
+    return {"message": "Shareholder upgrade rejected"}
+
+# ===================== VENDOR PROCUREMENT =====================
+
+@api_router.post("/vendor-procurement")
+async def create_vendor_procurement(procurement: VendorProcurementBase, current_user: dict = Depends(get_current_user)):
+    """Record a purchase from a vendor"""
+    if current_user["role"] not in ["admin", "agent"]:
+        raise HTTPException(status_code=403, detail="Only admin or agent can record vendor procurement")
+    
+    # Validate vendor
+    vendor = await db.vendors.find_one({"id": procurement.vendor_id, "is_active": True})
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    
+    # Validate product
+    product = await db.products.find_one({"id": procurement.product_id, "is_active": True})
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    # Validate outlet
+    outlet = await db.outlets.find_one({"id": procurement.outlet_id, "is_active": True})
+    if not outlet:
+        raise HTTPException(status_code=404, detail="Outlet not found")
+    
+    # Calculate total and credit
+    total_amount = procurement.quantity * procurement.rate
+    paid_amount = procurement.cash_amount + procurement.online_amount
+    credit_amount = total_amount - paid_amount
+    payment_status = "paid" if credit_amount <= 0 else "credit"
+    
+    # Generate receipt number
+    count = await db.vendor_procurement.count_documents({})
+    receipt_number = f"VP{datetime.now().strftime('%Y%m%d')}{str(count + 1).zfill(4)}"
+    
+    # Create procurement record
+    proc_obj = VendorProcurement(
+        **procurement.dict(),
+        receipt_number=receipt_number,
+        vendor_name=vendor["name"],
+        product_name=product["name"],
+        outlet_name=outlet["name"],
+        total_amount=total_amount,
+        credit_amount=credit_amount,
+        payment_status=payment_status,
+        created_by=current_user["id"]
+    )
+    
+    await db.vendor_procurement.insert_one(proc_obj.dict())
+    
+    # Add stock to the outlet
+    existing_stock = await db.stock.find_one({
+        "product_id": procurement.product_id,
+        "outlet_id": procurement.outlet_id
+    })
+    
+    if existing_stock:
+        await db.stock.update_one(
+            {"id": existing_stock["id"]},
+            {"$inc": {
+                "quantity": procurement.quantity,
+                "stock_received": procurement.quantity
+            }, "$set": {"updated_at": datetime.utcnow()}}
+        )
+    else:
+        new_stock = Stock(
+            product_id=procurement.product_id,
+            outlet_id=procurement.outlet_id,
+            quantity=procurement.quantity,
+            stock_received=procurement.quantity
+        )
+        await db.stock.insert_one(new_stock.dict())
+    
+    # Update vendor ledger
+    await db.vendors.update_one(
+        {"id": procurement.vendor_id},
+        {"$inc": {
+            "total_purchases": total_amount,
+            "total_paid": paid_amount,
+            "outstanding_dues": credit_amount
+        }, "$set": {"updated_at": datetime.utcnow()}}
+    )
+    
+    # Log stock movement
+    movement = StockMovement(
+        product_id=procurement.product_id,
+        to_outlet_id=procurement.outlet_id,
+        quantity=procurement.quantity,
+        movement_type="vendor_procurement",
+        reason=f"Vendor procurement from {vendor['name']}. Receipt: {receipt_number}",
+        created_by=current_user["id"]
+    )
+    await db.stock_movements.insert_one(movement.dict())
+    
+    return {
+        "message": "Vendor procurement recorded successfully",
+        "receipt_number": receipt_number,
+        "procurement_id": proc_obj.id
+    }
+
+@api_router.get("/vendor-procurement")
+async def get_vendor_procurement(
+    vendor_id: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get vendor procurement records"""
+    query = {}
+    
+    if vendor_id:
+        query["vendor_id"] = vendor_id
+    
+    if start_date:
+        query["created_at"] = {"$gte": datetime.fromisoformat(start_date)}
+    if end_date:
+        if "created_at" in query:
+            query["created_at"]["$lte"] = datetime.fromisoformat(end_date) + timedelta(days=1)
+        else:
+            query["created_at"] = {"$lte": datetime.fromisoformat(end_date) + timedelta(days=1)}
+    
+    procurements = await db.vendor_procurement.find(query).sort("created_at", -1).to_list(500)
+    result = []
+    for p in procurements:
+        p.pop('_id', None)
+        result.append(p)
+    return result
+
+@api_router.get("/vendor-procurement/{procurement_id}")
+async def get_procurement_detail(procurement_id: str, current_user: dict = Depends(get_current_user)):
+    """Get details of a specific procurement"""
+    procurement = await db.vendor_procurement.find_one({"id": procurement_id})
+    if not procurement:
+        raise HTTPException(status_code=404, detail="Procurement not found")
+    procurement.pop('_id', None)
+    return procurement
+
 # ===================== INITIALIZATION =====================
 
 @api_router.post("/init/setup")
