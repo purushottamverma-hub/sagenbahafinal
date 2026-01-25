@@ -331,3 +331,18 @@ agent_communication:
       Feature C - Search Functionality: 1) GET /api/products - Retrieved 5 products for client-side filtering. 2) GET /api/outlets - Retrieved 3 outlets for client-side filtering. 3) GET /api/stock - Retrieved 8 stock records for client-side filtering.
       
       All three new features are fully functional and ready for production use. All endpoints return proper HTTP 200 status codes and handle authentication correctly."
+  - agent: "main"
+    message: "Agent Procurement Feature Implemented:
+      1. Created new Agent Purchase screen (/app/frontend/app/(agent)/purchase.tsx) - mirrors Admin procurement functionality
+      2. Updated Agent layout (/app/frontend/app/(agent)/_layout.tsx) to include Purchase tab between Sales and Stock
+      3. Added translations for 'purchase' and 'notifications' in both English and Hindi
+      4. Key features:
+         - Agent can procure from both Farmers AND Vendors (as requested)
+         - Procurement limited to agent's assigned outlet only (auto-selected, no outlet dropdown)
+         - Manual entry toggle for quick transactions (type farmer/vendor/product names directly)
+         - Search functionality for farmers, vendors, and products
+         - Payment modes: Cash, Online, Credit, Partial
+         - All purchases automatically go to agent's assigned outlet stock
+      5. Verified via screenshots - Agent dashboard shows new Purchase tab and modal works correctly
+      
+      Testing needed: Full procurement flow testing with actual data entry"
