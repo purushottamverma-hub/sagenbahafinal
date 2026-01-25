@@ -701,6 +701,207 @@ class AuthTester:
             self.log_result("Vendors CRUD", False, "Request failed", str(e))
             return False
 
+    def test_sales_without_filter(self):
+        """Test GET /api/sales without date filter - should return all sales"""
+        print_test_header("Sales API - No Date Filter")
+        
+        if not self.admin_token:
+            self.log_result("Sales No Filter", False, "No admin token available")
+            return False
+            
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.admin_token}"
+        }
+        
+        try:
+            response = self.session.get(f"{BASE_URL}/sales", headers=headers)
+            print_info(f"GET Sales - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                sales_data = response.json()
+                sales_count = len(sales_data) if isinstance(sales_data, list) else 0
+                self.log_result("Sales No Filter", True, f"Retrieved {sales_count} sales records")
+                return sales_data
+            else:
+                self.log_result("Sales No Filter", False, f"HTTP {response.status_code}", response.text)
+                return None
+                
+        except Exception as e:
+            self.log_result("Sales No Filter", False, "Request failed", str(e))
+            return None
+
+    def test_sales_with_jan_2026_filter(self):
+        """Test GET /api/sales with January 2026 date filter"""
+        print_test_header("Sales API - Jan 2026 Date Filter")
+        
+        if not self.admin_token:
+            self.log_result("Sales Jan 2026 Filter", False, "No admin token available")
+            return False
+            
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.admin_token}"
+        }
+        
+        try:
+            params = {
+                "start_date": "2026-01-01",
+                "end_date": "2026-01-31"
+            }
+            
+            response = self.session.get(f"{BASE_URL}/sales", headers=headers, params=params)
+            print_info(f"GET Sales Jan 2026 - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                sales_data = response.json()
+                sales_count = len(sales_data) if isinstance(sales_data, list) else 0
+                
+                # Check if any sales are within the date range
+                jan_2026_sales = []
+                if isinstance(sales_data, list):
+                    for sale in sales_data:
+                        created_at = sale.get('created_at', '')
+                        if created_at and '2026-01' in created_at:
+                            jan_2026_sales.append(sale)
+                
+                self.log_result(
+                    "Sales Jan 2026 Filter", 
+                    True, 
+                    f"Retrieved {sales_count} total records, {len(jan_2026_sales)} from Jan 2026"
+                )
+                return sales_data
+            else:
+                self.log_result("Sales Jan 2026 Filter", False, f"HTTP {response.status_code}", response.text)
+                return None
+                
+        except Exception as e:
+            self.log_result("Sales Jan 2026 Filter", False, "Request failed", str(e))
+            return None
+
+    def test_sales_with_2020_filter(self):
+        """Test GET /api/sales with 2020 date filter - should return empty (no data from 2020)"""
+        print_test_header("Sales API - 2020 Date Filter (Should be Empty)")
+        
+        if not self.admin_token:
+            self.log_result("Sales 2020 Filter", False, "No admin token available")
+            return False
+            
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.admin_token}"
+        }
+        
+        try:
+            params = {
+                "start_date": "2020-01-01",
+                "end_date": "2020-01-31"
+            }
+            
+            response = self.session.get(f"{BASE_URL}/sales", headers=headers, params=params)
+            print_info(f"GET Sales 2020 - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                sales_data = response.json()
+                sales_count = len(sales_data) if isinstance(sales_data, list) else 0
+                
+                # Should be empty for 2020 data
+                self.log_result(
+                    "Sales 2020 Filter", 
+                    True, 
+                    f"Retrieved {sales_count} records (expected 0 for 2020)"
+                )
+                return sales_data
+            else:
+                self.log_result("Sales 2020 Filter", False, f"HTTP {response.status_code}", response.text)
+                return None
+                
+        except Exception as e:
+            self.log_result("Sales 2020 Filter", False, "Request failed", str(e))
+            return None
+
+    def test_farmer_purchases_without_filter(self):
+        """Test GET /api/farmer-purchases without date filter - should return all purchases"""
+        print_test_header("Farmer Purchases API - No Date Filter")
+        
+        if not self.admin_token:
+            self.log_result("Farmer Purchases No Filter", False, "No admin token available")
+            return False
+            
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.admin_token}"
+        }
+        
+        try:
+            response = self.session.get(f"{BASE_URL}/farmer-purchases", headers=headers)
+            print_info(f"GET Farmer Purchases - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                purchases_data = response.json()
+                purchases_count = len(purchases_data) if isinstance(purchases_data, list) else 0
+                self.log_result(
+                    "Farmer Purchases No Filter", 
+                    True, 
+                    f"Retrieved {purchases_count} farmer purchase records"
+                )
+                return purchases_data
+            else:
+                self.log_result("Farmer Purchases No Filter", False, f"HTTP {response.status_code}", response.text)
+                return None
+                
+        except Exception as e:
+            self.log_result("Farmer Purchases No Filter", False, "Request failed", str(e))
+            return None
+
+    def test_farmer_purchases_with_jan_2026_filter(self):
+        """Test GET /api/farmer-purchases with January 2026 date filter"""
+        print_test_header("Farmer Purchases API - Jan 2026 Date Filter")
+        
+        if not self.admin_token:
+            self.log_result("Farmer Purchases Jan 2026 Filter", False, "No admin token available")
+            return False
+            
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.admin_token}"
+        }
+        
+        try:
+            params = {
+                "start_date": "2026-01-01",
+                "end_date": "2026-01-31"
+            }
+            
+            response = self.session.get(f"{BASE_URL}/farmer-purchases", headers=headers, params=params)
+            print_info(f"GET Farmer Purchases Jan 2026 - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                purchases_data = response.json()
+                purchases_count = len(purchases_data) if isinstance(purchases_data, list) else 0
+                
+                # Check if any purchases are within the date range
+                jan_2026_purchases = []
+                if isinstance(purchases_data, list):
+                    for purchase in purchases_data:
+                        created_at = purchase.get('created_at', '')
+                        if created_at and '2026-01' in created_at:
+                            jan_2026_purchases.append(purchase)
+                
+                self.log_result(
+                    "Farmer Purchases Jan 2026 Filter", 
+                    True, 
+                    f"Retrieved {purchases_count} total records, {len(jan_2026_purchases)} from Jan 2026"
+                )
+                return purchases_data
+            else:
+                self.log_result("Farmer Purchases Jan 2026 Filter", False, f"HTTP {response.status_code}", response.text)
+                return None
+                
+        except Exception as e:
+            self.log_result("Farmer Purchases Jan 2026 Filter", False, "Request failed", str(e))
+            return None
+
     def run_all_tests(self):
         """Run all authentication and CRUD tests"""
         print(f"{Colors.BOLD}FPO Management System - Authentication & CRUD Testing{Colors.ENDC}")
