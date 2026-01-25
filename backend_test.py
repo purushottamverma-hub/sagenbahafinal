@@ -1599,6 +1599,12 @@ class AuthTester:
             self.test_stock_transfer_system
         ]
         
+        new_features_tests = [
+            self.test_feature_a_stock_transfer_requests,
+            self.test_feature_b_farmer_product_requests,
+            self.test_feature_c_search_functionality
+        ]
+        
         print(f"\n{Colors.BOLD}=== AUTHENTICATION TESTS ==={Colors.ENDC}")
         for test in auth_tests:
             try:
