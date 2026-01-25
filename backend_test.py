@@ -902,6 +902,349 @@ class AuthTester:
             self.log_result("Farmer Purchases Jan 2026 Filter", False, "Request failed", str(e))
             return None
 
+    # ===================== STOCK TRANSFER REQUEST SYSTEM TESTS =====================
+    
+    def test_stock_transfer_system(self):
+        """Test complete Stock Transfer Request System"""
+        print_test_header("Stock Transfer Request System - Complete Flow")
+        
+        if not self.admin_token:
+            self.log_result("Stock Transfer System", False, "No admin token available")
+            return False
+        
+        # Initialize variables for the test
+        self.test_product_id = None
+        self.from_outlet_id = None
+        self.to_outlet_id = None
+        self.transfer_request_id = None
+        
+        # Step 1: Get Products and Outlets
+        if not self._get_products_and_outlets_for_transfer():
+            return False
+        
+        # Step 2: Create Transfer Request
+        if not self._create_transfer_request():
+            return False
+        
+        # Step 3: Get Transfer Requests
+        if not self._get_transfer_requests():
+            return False
+        
+        # Step 4: Get Pending Count
+        if not self._get_pending_transfer_count():
+            return False
+        
+        # Step 5: Approve Transfer Request
+        if not self._approve_transfer_request():
+            return False
+        
+        # Step 6: Test Rejection (create another request first)
+        if not self._test_reject_transfer_request():
+            return False
+        
+        self.log_result("Stock Transfer System", True, "All stock transfer operations completed successfully")
+        return True
+    
+    def _get_products_and_outlets_for_transfer(self):
+        """Get products and outlets needed for transfer request"""
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.admin_token}"
+        }
+        
+        try:
+            # Get products
+            response = self.session.get(f"{BASE_URL}/products", headers=headers)
+            print_info(f"GET Products - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                products = response.json()
+                if len(products) > 0:
+                    self.test_product_id = products[0]["id"]
+                    print_success(f"Found product: {products[0]['name']} (ID: {self.test_product_id})")
+                else:
+                    self.log_result("Get Products for Transfer", False, "No products found")
+                    return False
+            else:
+                self.log_result("Get Products for Transfer", False, f"HTTP {response.status_code}", response.text)
+                return False
+            
+            # Get outlets
+            response = self.session.get(f"{BASE_URL}/outlets", headers=headers)
+            print_info(f"GET Outlets - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                outlets = response.json()
+                if len(outlets) >= 2:
+                    self.from_outlet_id = outlets[0]["id"]
+                    self.to_outlet_id = outlets[1]["id"]
+                    print_success(f"From outlet: {outlets[0]['name']} (ID: {self.from_outlet_id})")
+                    print_success(f"To outlet: {outlets[1]['name']} (ID: {self.to_outlet_id})")
+                    self.log_result("Get Products and Outlets", True, f"Retrieved {len(products)} products and {len(outlets)} outlets")
+                    return True
+                else:
+                    self.log_result("Get Outlets for Transfer", False, f"Need at least 2 outlets, found {len(outlets)}")
+                    return False
+            else:
+                self.log_result("Get Outlets for Transfer", False, f"HTTP {response.status_code}", response.text)
+                return False
+                
+        except Exception as e:
+            self.log_result("Get Products and Outlets", False, "Request failed", str(e))
+            return False
+    
+    def _create_transfer_request(self):
+        """Create a stock transfer request"""
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.admin_token}"
+        }
+        
+        try:
+            # First, add some stock to the source outlet
+            stock_data = {
+                "product_id": self.test_product_id,
+                "outlet_id": self.from_outlet_id,
+                "quantity": 100
+            }
+            
+            stock_response = self.session.post(f"{BASE_URL}/stock/add", json=stock_data, headers=headers)
+            if stock_response.status_code == 200:
+                print_info("Added 100 units of stock to source outlet")
+            
+            # Create transfer request
+            transfer_data = {
+                "product_id": self.test_product_id,
+                "from_outlet_id": self.from_outlet_id,
+                "to_outlet_id": self.to_outlet_id,
+                "quantity": 25,
+                "reason": "Testing stock transfer functionality"
+            }
+            
+            response = self.session.post(f"{BASE_URL}/stock/transfer-request", json=transfer_data, headers=headers)
+            print_info(f"POST Transfer Request - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                if "request_id" in data and "message" in data:
+                    self.transfer_request_id = data["request_id"]
+                    self.log_result("Create Transfer Request", True, f"Created request ID: {self.transfer_request_id}")
+                    return True
+                else:
+                    self.log_result("Create Transfer Request", False, "Missing request_id in response")
+            else:
+                error_msg = ""
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get("detail", "")
+                except:
+                    error_msg = response.text
+                self.log_result("Create Transfer Request", False, f"HTTP {response.status_code}", error_msg)
+            
+            return False
+            
+        except Exception as e:
+            self.log_result("Create Transfer Request", False, "Request failed", str(e))
+            return False
+    
+    def _get_transfer_requests(self):
+        """Get transfer requests"""
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.admin_token}"
+        }
+        
+        try:
+            # Get all transfer requests
+            response = self.session.get(f"{BASE_URL}/stock/transfer-requests", headers=headers)
+            print_info(f"GET All Transfer Requests - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                requests_data = response.json()
+                if len(requests_data) > 0:
+                    # Check if our request is in the list
+                    found_our_request = any(req["id"] == self.transfer_request_id for req in requests_data)
+                    if found_our_request:
+                        print_success(f"Found our test request in the list of {len(requests_data)} requests")
+                    else:
+                        print_warning("Our test request not found in the list")
+                else:
+                    self.log_result("Get All Transfer Requests", False, "No transfer requests found")
+                    return False
+            else:
+                self.log_result("Get All Transfer Requests", False, f"HTTP {response.status_code}", response.text)
+                return False
+            
+            # Get pending transfer requests
+            response = self.session.get(f"{BASE_URL}/stock/transfer-requests", headers=headers, params={"status": "pending"})
+            print_info(f"GET Pending Transfer Requests - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                pending_requests = response.json()
+                pending_count = len(pending_requests)
+                
+                # Verify our request is pending
+                found_pending = any(req["id"] == self.transfer_request_id and req["status"] == "pending" for req in pending_requests)
+                if found_pending:
+                    print_success(f"Our test request is in pending status among {pending_count} pending requests")
+                else:
+                    print_warning("Our test request not found in pending list")
+                
+                self.log_result("Get Transfer Requests", True, f"Retrieved {len(requests_data)} total and {pending_count} pending requests")
+                return True
+            else:
+                self.log_result("Get Pending Transfer Requests", False, f"HTTP {response.status_code}", response.text)
+                return False
+                
+        except Exception as e:
+            self.log_result("Get Transfer Requests", False, "Request failed", str(e))
+            return False
+    
+    def _get_pending_transfer_count(self):
+        """Get pending transfer requests count"""
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.admin_token}"
+        }
+        
+        try:
+            response = self.session.get(f"{BASE_URL}/stock/transfer-requests/pending-count", headers=headers)
+            print_info(f"GET Pending Count - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                if "count" in data:
+                    count = data["count"]
+                    self.log_result("Get Pending Count", True, f"Pending count: {count}")
+                    return True
+                else:
+                    self.log_result("Get Pending Count", False, "Missing count in response")
+            else:
+                self.log_result("Get Pending Count", False, f"HTTP {response.status_code}", response.text)
+            
+            return False
+            
+        except Exception as e:
+            self.log_result("Get Pending Count", False, "Request failed", str(e))
+            return False
+    
+    def _approve_transfer_request(self):
+        """Approve a transfer request"""
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.admin_token}"
+        }
+        
+        try:
+            # Approve the transfer request
+            response = self.session.put(
+                f"{BASE_URL}/stock/transfer-requests/{self.transfer_request_id}/approve", 
+                headers=headers, 
+                params={"remark": "Approved for testing"}
+            )
+            print_info(f"PUT Approve Transfer - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                if "message" in data:
+                    # Verify the request status changed to approved
+                    verify_response = self.session.get(f"{BASE_URL}/stock/transfer-requests", headers=headers)
+                    if verify_response.status_code == 200:
+                        requests_data = verify_response.json()
+                        approved_request = next((req for req in requests_data if req["id"] == self.transfer_request_id), None)
+                        if approved_request and approved_request["status"] == "approved":
+                            print_success(f"Request status updated to approved by {approved_request.get('approved_by_name', 'Unknown')}")
+                            self.log_result("Approve Transfer Request", True, data["message"])
+                            return True
+                        else:
+                            print_warning("Request status not updated properly")
+                    
+                    self.log_result("Approve Transfer Request", True, data["message"])
+                    return True
+                else:
+                    self.log_result("Approve Transfer Request", False, "Missing message in response")
+            else:
+                error_msg = ""
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get("detail", "")
+                except:
+                    error_msg = response.text
+                self.log_result("Approve Transfer Request", False, f"HTTP {response.status_code}", error_msg)
+            
+            return False
+            
+        except Exception as e:
+            self.log_result("Approve Transfer Request", False, "Request failed", str(e))
+            return False
+    
+    def _test_reject_transfer_request(self):
+        """Test rejecting a transfer request (create another one first)"""
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.admin_token}"
+        }
+        
+        try:
+            # Create another transfer request to reject
+            transfer_data = {
+                "product_id": self.test_product_id,
+                "from_outlet_id": self.from_outlet_id,
+                "to_outlet_id": self.to_outlet_id,
+                "quantity": 15,
+                "reason": "Testing rejection functionality"
+            }
+            
+            create_response = self.session.post(f"{BASE_URL}/stock/transfer-request", json=transfer_data, headers=headers)
+            
+            if create_response.status_code == 200:
+                reject_request_id = create_response.json()["request_id"]
+                print_info(f"Created new request for rejection: {reject_request_id}")
+                
+                # Reject the transfer request
+                response = self.session.put(
+                    f"{BASE_URL}/stock/transfer-requests/{reject_request_id}/reject", 
+                    headers=headers, 
+                    params={"remark": "Testing rejection"}
+                )
+                print_info(f"PUT Reject Transfer - Status: {response.status_code}")
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if "message" in data:
+                        # Verify the request status changed to rejected
+                        verify_response = self.session.get(f"{BASE_URL}/stock/transfer-requests", headers=headers)
+                        if verify_response.status_code == 200:
+                            requests_data = verify_response.json()
+                            rejected_request = next((req for req in requests_data if req["id"] == reject_request_id), None)
+                            if rejected_request and rejected_request["status"] == "rejected":
+                                print_success(f"Request status updated to rejected by {rejected_request.get('approved_by_name', 'Unknown')}")
+                                self.log_result("Reject Transfer Request", True, data["message"])
+                                return True
+                            else:
+                                print_warning("Request status not updated properly")
+                        
+                        self.log_result("Reject Transfer Request", True, data["message"])
+                        return True
+                    else:
+                        self.log_result("Reject Transfer Request", False, "Missing message in response")
+                else:
+                    error_msg = ""
+                    try:
+                        error_data = response.json()
+                        error_msg = error_data.get("detail", "")
+                    except:
+                        error_msg = response.text
+                    self.log_result("Reject Transfer Request", False, f"HTTP {response.status_code}", error_msg)
+            else:
+                self.log_result("Reject Transfer Request", False, "Failed to create request for rejection test")
+            
+            return False
+            
+        except Exception as e:
+            self.log_result("Reject Transfer Request", False, "Request failed", str(e))
+            return False
+
     def run_all_tests(self):
         """Run all authentication and CRUD tests"""
         print(f"{Colors.BOLD}FPO Management System - Authentication & CRUD Testing{Colors.ENDC}")
