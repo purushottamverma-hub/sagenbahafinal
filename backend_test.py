@@ -926,6 +926,14 @@ class AuthTester:
             self.test_vendors_crud
         ]
         
+        date_filter_tests = [
+            self.test_sales_without_filter,
+            self.test_sales_with_jan_2026_filter,
+            self.test_sales_with_2020_filter,
+            self.test_farmer_purchases_without_filter,
+            self.test_farmer_purchases_with_jan_2026_filter
+        ]
+        
         print(f"\n{Colors.BOLD}=== AUTHENTICATION TESTS ==={Colors.ENDC}")
         for test in auth_tests:
             try:
