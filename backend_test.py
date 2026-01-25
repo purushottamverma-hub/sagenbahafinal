@@ -702,13 +702,13 @@ class AuthTester:
             return False
 
     def run_all_tests(self):
-        """Run all authentication tests"""
-        print(f"{Colors.BOLD}FPO Management System - Authentication Testing{Colors.ENDC}")
+        """Run all authentication and CRUD tests"""
+        print(f"{Colors.BOLD}FPO Management System - Authentication & CRUD Testing{Colors.ENDC}")
         print(f"Base URL: {BASE_URL}")
         print(f"Test Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
-        # Test sequence
-        tests = [
+        # Test sequence - Authentication first, then CRUD operations
+        auth_tests = [
             self.test_login_success,
             self.test_login_wrong_password,
             self.test_login_nonexistent_user,
@@ -719,7 +719,23 @@ class AuthTester:
             self.test_invalid_token
         ]
         
-        for test in tests:
+        crud_tests = [
+            self.test_products_crud,
+            self.test_outlets_crud,
+            self.test_vendors_crud
+        ]
+        
+        print(f"\n{Colors.BOLD}=== AUTHENTICATION TESTS ==={Colors.ENDC}")
+        for test in auth_tests:
+            try:
+                test()
+            except Exception as e:
+                print_error(f"Test {test.__name__} crashed: {str(e)}")
+                self.test_results['failed'] += 1
+                self.test_results['errors'].append(f"{test.__name__}: Crashed - {str(e)}")
+        
+        print(f"\n{Colors.BOLD}=== ADMIN CRUD TESTS ==={Colors.ENDC}")
+        for test in crud_tests:
             try:
                 test()
             except Exception as e:
