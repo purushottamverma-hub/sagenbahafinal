@@ -641,22 +641,28 @@ async def get_product_requests(status: Optional[str] = None, current_user: dict 
         query["status"] = status
     
     requests = await db.product_requests.find(query).sort("created_at", -1).to_list(1000)
-    return requests
+    # Clean MongoDB _id
+    result = []
+    for r in requests:
+        r.pop('_id', None)
+        result.append(r)
+    return result
 
 @api_router.put("/product-requests/{request_id}")
 async def update_product_request(request_id: str, updates: dict, current_user: dict = Depends(get_current_user)):
-    """Update a product request (approve/reject/complete)"""
-    if current_user["role"] not in ["agent", "admin"]:
-        raise HTTPException(status_code=403, detail="Only agents and admins can process requests")
-    
+    """Update a product request (approve/reject/complete) - any party can mark as resolved"""
     req = await db.product_requests.find_one({"id": request_id})
     if not req:
         raise HTTPException(status_code=404, detail="Request not found")
     
+    # Allow farmer, agent, or admin to update/resolve
+    if current_user["role"] == "farmer" and req.get("farmer_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
     updates["processed_by"] = current_user["id"]
     updates["processed_at"] = datetime.utcnow()
     
-    if current_user["role"] == "agent":
+    if current_user["role"] == "agent" and not updates.get("outlet_id"):
         updates["outlet_id"] = current_user.get("outlet_id")
     
     await db.product_requests.update_one({"id": request_id}, {"$set": updates})
@@ -665,16 +671,28 @@ async def update_product_request(request_id: str, updates: dict, current_user: d
 @api_router.get("/my-transactions")
 async def get_my_transactions(current_user: dict = Depends(get_current_user)):
     """Get transactions for current user (farmers see their sales/purchases)"""
+    
+    def clean_docs(docs):
+        """Remove MongoDB _id from documents"""
+        result = []
+        for d in docs:
+            if d:
+                d.pop('_id', None)
+                result.append(d)
+        return result
+    
     if current_user["role"] == "farmer":
         # Get farmer purchases (when FPO bought from this farmer)
         farmer = await db.farmers.find_one({"mobile": current_user.get("mobile")})
+        purchases = []
         if farmer:
-            purchases = await db.farmer_purchases.find({"farmer_id": farmer["id"]}).sort("created_at", -1).to_list(100)
-        else:
-            purchases = []
+            farmer.pop('_id', None)
+            purchases_raw = await db.farmer_purchases.find({"farmer_id": farmer["id"]}).sort("created_at", -1).to_list(100)
+            purchases = clean_docs(purchases_raw)
         
         # Get product requests
-        requests = await db.product_requests.find({"farmer_id": current_user["id"]}).sort("created_at", -1).to_list(100)
+        requests_raw = await db.product_requests.find({"farmer_id": current_user["id"]}).sort("created_at", -1).to_list(100)
+        requests = clean_docs(requests_raw)
         
         return {
             "purchases": purchases,
@@ -685,13 +703,16 @@ async def get_my_transactions(current_user: dict = Depends(get_current_user)):
         # Agents see their outlet transactions plus their own farmer transactions
         outlet_id = current_user.get("outlet_id")
         
-        sales = await db.sales.find({"outlet_id": outlet_id}).sort("created_at", -1).to_list(100) if outlet_id else []
+        sales_raw = await db.sales.find({"outlet_id": outlet_id}).sort("created_at", -1).to_list(100) if outlet_id else []
+        sales = clean_docs(sales_raw)
         
         # Also check if agent is registered as farmer
         farmer = await db.farmers.find_one({"mobile": current_user.get("mobile")})
         farmer_purchases = []
         if farmer:
-            farmer_purchases = await db.farmer_purchases.find({"farmer_id": farmer["id"]}).sort("created_at", -1).to_list(100)
+            farmer.pop('_id', None)
+            purchases_raw = await db.farmer_purchases.find({"farmer_id": farmer["id"]}).sort("created_at", -1).to_list(100)
+            farmer_purchases = clean_docs(purchases_raw)
         
         return {
             "outlet_sales": sales,
@@ -699,7 +720,7 @@ async def get_my_transactions(current_user: dict = Depends(get_current_user)):
             "farmer_profile": farmer
         }
     
-    return {"message": "No transactions"}
+    return {"purchases": [], "requests": [], "message": "No transactions"}
 
 # ===================== OUTLET ROUTES =====================
 
