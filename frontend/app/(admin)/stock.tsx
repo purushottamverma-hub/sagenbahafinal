@@ -818,6 +818,80 @@ export default function StockScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Approval Modal with Quantity Modification */}
+      <Modal visible={showApprovalModal} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {language === 'hi' ? 'अनुरोध अनुमोदित करें' : 'Approve Request'}
+              </Text>
+              <TouchableOpacity onPress={() => setShowApprovalModal(false)}>
+                <Ionicons name="close" size={24} color="#666" />
+              </TouchableOpacity>
+            </View>
+
+            {approvalRequest && (
+              <>
+                <View style={styles.approvalInfo}>
+                  <Text style={styles.approvalProduct}>{approvalRequest.product_name}</Text>
+                  <View style={styles.transferFlow}>
+                    <View style={styles.outletBox}>
+                      <Text style={styles.outletLabel}>{language === 'hi' ? 'से' : 'From'}</Text>
+                      <Text style={styles.outletText}>{approvalRequest.from_outlet_name}</Text>
+                    </View>
+                    <Ionicons name="arrow-forward" size={20} color="#666" />
+                    <View style={styles.outletBox}>
+                      <Text style={styles.outletLabel}>{language === 'hi' ? 'को' : 'To'}</Text>
+                      <Text style={styles.outletText}>{approvalRequest.to_outlet_name}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.requestedQtyLabel}>
+                    {language === 'hi' ? 'अनुरोधित मात्रा:' : 'Requested Quantity:'} 
+                    <Text style={styles.requestedQtyValue}> {approvalRequest.quantity}</Text>
+                  </Text>
+                </View>
+
+                <Input
+                  label={language === 'hi' ? 'अनुमोदित मात्रा' : 'Approved Quantity'}
+                  placeholder="0"
+                  value={approvalQuantity}
+                  onChangeText={setApprovalQuantity}
+                  keyboardType="decimal-pad"
+                />
+                <Text style={styles.quantityHint}>
+                  {language === 'hi' 
+                    ? 'आप आंशिक, पूर्ण या अधिक मात्रा अनुमोदित कर सकते हैं' 
+                    : 'You can approve partial, full, or more quantity'}
+                </Text>
+
+                <Input
+                  label={language === 'hi' ? 'टिप्पणी (वैकल्पिक)' : 'Remark (optional)'}
+                  placeholder={language === 'hi' ? 'टिप्पणी दर्ज करें...' : 'Enter remark...'}
+                  value={approvalRemark}
+                  onChangeText={setApprovalRemark}
+                />
+
+                <View style={styles.modalButtons}>
+                  <Button 
+                    title={t('cancel')} 
+                    variant="outline" 
+                    onPress={() => setShowApprovalModal(false)} 
+                    style={{ flex: 1, marginRight: 8 }} 
+                  />
+                  <Button 
+                    title={language === 'hi' ? 'अनुमोदित करें' : 'Approve'} 
+                    onPress={submitApproval} 
+                    loading={submitting} 
+                    style={{ flex: 1 }} 
+                  />
+                </View>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
