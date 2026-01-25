@@ -242,6 +242,8 @@ class FarmerBase(BaseModel):
     village: str
     mobile: Optional[str] = None
     is_member: bool = False
+    is_shareholder: bool = False
+    share_certificate_url: Optional[str] = None
     is_active: bool = True
 
 class FarmerCreate(FarmerBase):
@@ -251,6 +253,25 @@ class Farmer(FarmerBase):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     total_supplied: float = 0
     total_payable: float = 0
+    total_paid: float = 0
+    outstanding_dues: float = 0
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+# Vendor model for procurement
+class VendorBase(BaseModel):
+    name: str
+    mobile: Optional[str] = None
+    address: Optional[str] = None
+    products: List[str] = []
+    is_active: bool = True
+
+class VendorCreate(VendorBase):
+    pass
+
+class Vendor(VendorBase):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    total_purchases: float = 0
     total_paid: float = 0
     outstanding_dues: float = 0
     created_at: datetime = Field(default_factory=datetime.utcnow)
