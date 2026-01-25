@@ -472,6 +472,235 @@ class AuthTester:
             self.log_result("Protected Endpoint Invalid Token", False, "Request failed", str(e))
             return False
 
+    def test_products_crud(self):
+        """Test Products CRUD operations"""
+        print_test_header("Products CRUD Operations")
+        
+        if not self.admin_token:
+            self.log_result("Products CRUD", False, "No admin token available")
+            return False
+            
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.admin_token}"
+        }
+        
+        product_id = None
+        
+        try:
+            # 1. GET /api/products - List all products
+            response = self.session.get(f"{BASE_URL}/products", headers=headers)
+            print_info(f"GET Products - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                products = response.json()
+                self.log_result("Products GET", True, f"Retrieved {len(products)} products")
+            else:
+                self.log_result("Products GET", False, f"HTTP {response.status_code}", response.text)
+                return False
+            
+            # 2. POST /api/products - Create new product
+            new_product = {
+                "name": "Test Rice",
+                "name_hi": "टेस्ट चावल", 
+                "unit": "kg",
+                "category": "produce"
+            }
+            
+            response = self.session.post(f"{BASE_URL}/products", json=new_product, headers=headers)
+            print_info(f"POST Product - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                created_product = response.json()
+                product_id = created_product.get("id")
+                if product_id:
+                    self.log_result("Products POST", True, f"Created product with ID: {product_id}")
+                else:
+                    self.log_result("Products POST", False, "Product created but no ID returned")
+                    return False
+            else:
+                self.log_result("Products POST", False, f"HTTP {response.status_code}", response.text)
+                return False
+            
+            # 3. PUT /api/products/{id} - Update the created product
+            update_data = {"name": "Test Rice Updated"}
+            response = self.session.put(f"{BASE_URL}/products/{product_id}", json=update_data, headers=headers)
+            print_info(f"PUT Product - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                self.log_result("Products PUT", True, "Product updated successfully")
+            else:
+                self.log_result("Products PUT", False, f"HTTP {response.status_code}", response.text)
+                return False
+            
+            # 4. DELETE /api/products/{id} - Soft delete the product
+            response = self.session.delete(f"{BASE_URL}/products/{product_id}", headers=headers)
+            print_info(f"DELETE Product - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                self.log_result("Products DELETE", True, "Product soft deleted successfully")
+            else:
+                self.log_result("Products DELETE", False, f"HTTP {response.status_code}", response.text)
+                return False
+                
+            return True
+            
+        except Exception as e:
+            self.log_result("Products CRUD", False, "Request failed", str(e))
+            return False
+
+    def test_outlets_crud(self):
+        """Test Outlets CRUD operations"""
+        print_test_header("Outlets CRUD Operations")
+        
+        if not self.admin_token:
+            self.log_result("Outlets CRUD", False, "No admin token available")
+            return False
+            
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.admin_token}"
+        }
+        
+        outlet_id = None
+        
+        try:
+            # 1. GET /api/outlets - List all outlets
+            response = self.session.get(f"{BASE_URL}/outlets", headers=headers)
+            print_info(f"GET Outlets - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                outlets = response.json()
+                self.log_result("Outlets GET", True, f"Retrieved {len(outlets)} outlets")
+            else:
+                self.log_result("Outlets GET", False, f"HTTP {response.status_code}", response.text)
+                return False
+            
+            # 2. POST /api/outlets - Create new outlet
+            new_outlet = {
+                "name": "Test Outlet",
+                "address": "Test Address", 
+                "contact_person": "Test Person"
+            }
+            
+            response = self.session.post(f"{BASE_URL}/outlets", json=new_outlet, headers=headers)
+            print_info(f"POST Outlet - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                created_outlet = response.json()
+                outlet_id = created_outlet.get("id")
+                if outlet_id:
+                    self.log_result("Outlets POST", True, f"Created outlet with ID: {outlet_id}")
+                else:
+                    self.log_result("Outlets POST", False, "Outlet created but no ID returned")
+                    return False
+            else:
+                self.log_result("Outlets POST", False, f"HTTP {response.status_code}", response.text)
+                return False
+            
+            # 3. PUT /api/outlets/{id} - Update the created outlet
+            update_data = {"name": "Test Outlet Updated"}
+            response = self.session.put(f"{BASE_URL}/outlets/{outlet_id}", json=update_data, headers=headers)
+            print_info(f"PUT Outlet - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                self.log_result("Outlets PUT", True, "Outlet updated successfully")
+            else:
+                self.log_result("Outlets PUT", False, f"HTTP {response.status_code}", response.text)
+                return False
+            
+            # 4. DELETE /api/outlets/{id} - Soft delete the outlet
+            response = self.session.delete(f"{BASE_URL}/outlets/{outlet_id}", headers=headers)
+            print_info(f"DELETE Outlet - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                self.log_result("Outlets DELETE", True, "Outlet soft deleted successfully")
+            else:
+                self.log_result("Outlets DELETE", False, f"HTTP {response.status_code}", response.text)
+                return False
+                
+            return True
+            
+        except Exception as e:
+            self.log_result("Outlets CRUD", False, "Request failed", str(e))
+            return False
+
+    def test_vendors_crud(self):
+        """Test Vendors CRUD operations"""
+        print_test_header("Vendors CRUD Operations")
+        
+        if not self.admin_token:
+            self.log_result("Vendors CRUD", False, "No admin token available")
+            return False
+            
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.admin_token}"
+        }
+        
+        vendor_id = None
+        
+        try:
+            # 1. GET /api/vendors - List all vendors
+            response = self.session.get(f"{BASE_URL}/vendors", headers=headers)
+            print_info(f"GET Vendors - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                vendors = response.json()
+                self.log_result("Vendors GET", True, f"Retrieved {len(vendors)} vendors")
+            else:
+                self.log_result("Vendors GET", False, f"HTTP {response.status_code}", response.text)
+                return False
+            
+            # 2. POST /api/vendors - Create new vendor
+            new_vendor = {
+                "name": "Test Vendor",
+                "mobile": "9876543210",
+                "address": "Test Vendor Address"
+            }
+            
+            response = self.session.post(f"{BASE_URL}/vendors", json=new_vendor, headers=headers)
+            print_info(f"POST Vendor - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                created_vendor = response.json()
+                vendor_id = created_vendor.get("id")
+                if vendor_id:
+                    self.log_result("Vendors POST", True, f"Created vendor with ID: {vendor_id}")
+                else:
+                    self.log_result("Vendors POST", False, "Vendor created but no ID returned")
+                    return False
+            else:
+                self.log_result("Vendors POST", False, f"HTTP {response.status_code}", response.text)
+                return False
+            
+            # 3. PUT /api/vendors/{id} - Update the created vendor
+            update_data = {"name": "Test Vendor Updated"}
+            response = self.session.put(f"{BASE_URL}/vendors/{vendor_id}", json=update_data, headers=headers)
+            print_info(f"PUT Vendor - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                self.log_result("Vendors PUT", True, "Vendor updated successfully")
+            else:
+                self.log_result("Vendors PUT", False, f"HTTP {response.status_code}", response.text)
+                return False
+            
+            # 4. DELETE /api/vendors/{id} - Soft delete the vendor
+            response = self.session.delete(f"{BASE_URL}/vendors/{vendor_id}", headers=headers)
+            print_info(f"DELETE Vendor - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                self.log_result("Vendors DELETE", True, "Vendor soft deleted successfully")
+            else:
+                self.log_result("Vendors DELETE", False, f"HTTP {response.status_code}", response.text)
+                return False
+                
+            return True
+            
+        except Exception as e:
+            self.log_result("Vendors CRUD", False, "Request failed", str(e))
+            return False
+
     def run_all_tests(self):
         """Run all authentication tests"""
         print(f"{Colors.BOLD}FPO Management System - Authentication Testing{Colors.ENDC}")
