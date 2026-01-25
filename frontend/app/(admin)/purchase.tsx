@@ -10,6 +10,7 @@ import {
   Alert,
   TextInput,
   ScrollView,
+  Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -87,7 +88,7 @@ export default function PurchaseScreen() {
   const [onlineAmount, setOnlineAmount] = useState('');
   const [notes, setNotes] = useState('');
 
-  // Manual entry states
+  // Manual entry states - for quick transactions
   const [useManualSource, setUseManualSource] = useState(false);
   const [manualSourceName, setManualSourceName] = useState('');
   const [manualSourceMobile, setManualSourceMobile] = useState('');
@@ -127,7 +128,6 @@ export default function PurchaseScreen() {
       setProducts(productRes.data);
       setOutlets(outletRes.data);
       
-      // Set defaults
       if (outletRes.data.length > 0) setSelectedOutlet(outletRes.data[0].id);
     } catch (error) {
       console.error('Failed to fetch data:', error);
@@ -178,23 +178,42 @@ export default function PurchaseScreen() {
     const online = parseFloat(onlineAmount || '0');
     
     switch (paymentMode) {
-      case 'cash':
-        return { cash: total, online: 0, credit: 0 };
-      case 'online':
-        return { cash: 0, online: total, credit: 0 };
-      case 'credit':
-        return { cash: 0, online: 0, credit: total };
-      case 'partial':
-        return { cash, online, credit: Math.max(0, total - cash - online) };
+      case 'cash': return { cash: total, online: 0, credit: 0 };
+      case 'online': return { cash: 0, online: total, credit: 0 };
+      case 'credit': return { cash: 0, online: 0, credit: total };
+      case 'partial': return { cash, online, credit: Math.max(0, total - cash - online) };
     }
   };
 
   const handleSubmit = async () => {
-    if (!selectedSource || !selectedProduct || !selectedOutlet || !quantity || !rate) {
-      Alert.alert(
-        language === 'hi' ? 'त्रुटि' : 'Error',
-        language === 'hi' ? 'सभी आवश्यक फील्ड भरें' : 'Please fill all required fields'
-      );
+    // Validate outlet (always required)
+    if (!selectedOutlet) {
+      Alert.alert(language === 'hi' ? 'त्रुटि' : 'Error', language === 'hi' ? 'आउटलेट चुनें' : 'Select outlet');
+      return;
+    }
+
+    // Validate source
+    if (!useManualSource && !selectedSource) {
+      Alert.alert(language === 'hi' ? 'त्रुटि' : 'Error', language === 'hi' ? 'किसान/विक्रेता चुनें' : 'Select farmer/vendor');
+      return;
+    }
+    if (useManualSource && !manualSourceName.trim()) {
+      Alert.alert(language === 'hi' ? 'त्रुटि' : 'Error', language === 'hi' ? 'नाम दर्ज करें' : 'Enter name');
+      return;
+    }
+
+    // Validate product
+    if (!useManualProduct && !selectedProduct) {
+      Alert.alert(language === 'hi' ? 'त्रुटि' : 'Error', language === 'hi' ? 'उत्पाद चुनें' : 'Select product');
+      return;
+    }
+    if (useManualProduct && !manualProductName.trim()) {
+      Alert.alert(language === 'hi' ? 'त्रुटि' : 'Error', language === 'hi' ? 'उत्पाद नाम दर्ज करें' : 'Enter product name');
+      return;
+    }
+
+    if (!quantity || !rate) {
+      Alert.alert(language === 'hi' ? 'त्रुटि' : 'Error', language === 'hi' ? 'मात्रा और दर दर्ज करें' : 'Enter quantity and rate');
       return;
     }
 
@@ -203,20 +222,28 @@ export default function PurchaseScreen() {
 
     try {
       if (sourceType === 'farmer') {
-        // Farmer purchase
+        // Farmer purchase with optional manual entries
         await api.post('/farmer-purchases', {
-          farmer_id: selectedSource,
-          product_id: selectedProduct,
+          farmer_id: useManualSource ? 'manual' : selectedSource,
+          manual_farmer_name: useManualSource ? manualSourceName : null,
+          manual_farmer_mobile: useManualSource ? manualSourceMobile : null,
+          product_id: useManualProduct ? 'manual' : selectedProduct,
+          manual_product_name: useManualProduct ? manualProductName : null,
+          manual_product_unit: useManualProduct ? manualProductUnit : null,
           quantity: parseFloat(quantity),
           rate: parseFloat(rate),
           payment_status: paymentMode === 'credit' ? 'credit' : 'paid',
           outlet_id: selectedOutlet,
         });
       } else {
-        // Vendor procurement
+        // Vendor procurement with optional manual entries
         await api.post('/vendor-procurement', {
-          vendor_id: selectedSource,
-          product_id: selectedProduct,
+          vendor_id: useManualSource ? 'manual' : selectedSource,
+          manual_vendor_name: useManualSource ? manualSourceName : null,
+          manual_vendor_mobile: useManualSource ? manualSourceMobile : null,
+          product_id: useManualProduct ? 'manual' : selectedProduct,
+          manual_product_name: useManualProduct ? manualProductName : null,
+          manual_product_unit: useManualProduct ? manualProductUnit : null,
           outlet_id: selectedOutlet,
           quantity: parseFloat(quantity),
           rate: parseFloat(rate),
@@ -257,6 +284,12 @@ export default function PurchaseScreen() {
     setSourceSearch('');
     setProductSearch('');
     setOutletSearch('');
+    setUseManualSource(false);
+    setManualSourceName('');
+    setManualSourceMobile('');
+    setUseManualProduct(false);
+    setManualProductName('');
+    setManualProductUnit('kg');
   };
 
   const renderPurchase = ({ item }: { item: Purchase }) => (
@@ -400,91 +433,161 @@ export default function PurchaseScreen() {
                 </TouchableOpacity>
               </View>
 
-              {/* Source Search & Selection */}
-              <Text style={styles.label}>
-                {sourceType === 'farmer' 
-                  ? (language === 'hi' ? 'किसान चुनें' : 'Select Farmer')
-                  : (language === 'hi' ? 'विक्रेता चुनें' : 'Select Vendor')
-                } *
-              </Text>
-              <View style={styles.searchBox}>
-                <Ionicons name="search" size={18} color="#999" />
-                <TextInput
-                  style={styles.searchInput}
-                  placeholder={language === 'hi' ? 'नाम या मोबाइल से खोजें...' : 'Search by name or mobile...'}
-                  value={sourceSearch}
-                  onChangeText={setSourceSearch}
-                  placeholderTextColor="#999"
+              {/* Manual Entry Toggle for Source */}
+              <View style={styles.manualToggle}>
+                <Text style={styles.manualToggleText}>
+                  {language === 'hi' ? 'नाम मैन्युअल लिखें (जल्दी लेनदेन)' : 'Write name manually (quick transaction)'}
+                </Text>
+                <Switch
+                  value={useManualSource}
+                  onValueChange={(v) => { setUseManualSource(v); setSelectedSource(''); }}
+                  trackColor={{ false: '#DDD', true: '#81C784' }}
+                  thumbColor={useManualSource ? '#2E7D32' : '#999'}
                 />
-                {sourceSearch.length > 0 && (
-                  <TouchableOpacity onPress={() => setSourceSearch('')}>
-                    <Ionicons name="close-circle" size={18} color="#999" />
-                  </TouchableOpacity>
-                )}
               </View>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.selectScroll}>
-                {filteredSources.map((s) => (
-                  <TouchableOpacity
-                    key={s.id}
-                    style={[
-                      styles.selectChip,
-                      selectedSource === s.id && (sourceType === 'farmer' ? styles.farmerChipActive : styles.vendorChipActive)
-                    ]}
-                    onPress={() => setSelectedSource(s.id)}
-                  >
-                    <Text style={[
-                      styles.selectText,
-                      selectedSource === s.id && styles.selectTextActive
-                    ]}>
-                      {s.name}
-                    </Text>
-                    {s.mobile && (
-                      <Text style={[
-                        styles.selectSubtext,
-                        selectedSource === s.id && styles.selectTextActive
-                      ]}>
-                        {s.mobile}
-                      </Text>
-                    )}
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
 
-              {/* Product Search & Selection */}
-              <Text style={styles.label}>
-                {language === 'hi' ? 'उत्पाद चुनें' : 'Select Product'} *
-              </Text>
-              <View style={styles.searchBox}>
-                <Ionicons name="search" size={18} color="#999" />
-                <TextInput
-                  style={styles.searchInput}
-                  placeholder={language === 'hi' ? 'उत्पाद खोजें...' : 'Search products...'}
-                  value={productSearch}
-                  onChangeText={setProductSearch}
-                  placeholderTextColor="#999"
+              {useManualSource ? (
+                <View style={styles.manualInputs}>
+                  <Input
+                    label={sourceType === 'farmer' 
+                      ? (language === 'hi' ? 'किसान का नाम' : 'Farmer Name')
+                      : (language === 'hi' ? 'विक्रेता का नाम' : 'Vendor Name')
+                    }
+                    placeholder={language === 'hi' ? 'नाम दर्ज करें' : 'Enter name'}
+                    value={manualSourceName}
+                    onChangeText={setManualSourceName}
+                  />
+                  <Input
+                    label={language === 'hi' ? 'मोबाइल (वैकल्पिक)' : 'Mobile (optional)'}
+                    placeholder="9876543210"
+                    value={manualSourceMobile}
+                    onChangeText={setManualSourceMobile}
+                    keyboardType="phone-pad"
+                  />
+                </View>
+              ) : (
+                <>
+                  {/* Source Search & Selection */}
+                  <Text style={styles.label}>
+                    {sourceType === 'farmer' 
+                      ? (language === 'hi' ? 'किसान चुनें' : 'Select Farmer')
+                      : (language === 'hi' ? 'विक्रेता चुनें' : 'Select Vendor')
+                    } *
+                  </Text>
+                  <View style={styles.searchBox}>
+                    <Ionicons name="search" size={18} color="#999" />
+                    <TextInput
+                      style={styles.searchInput}
+                      placeholder={language === 'hi' ? 'नाम या मोबाइल से खोजें...' : 'Search by name or mobile...'}
+                      value={sourceSearch}
+                      onChangeText={setSourceSearch}
+                      placeholderTextColor="#999"
+                    />
+                    {sourceSearch.length > 0 && (
+                      <TouchableOpacity onPress={() => setSourceSearch('')}>
+                        <Ionicons name="close-circle" size={18} color="#999" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.selectScroll}>
+                    {filteredSources.map((s) => (
+                      <TouchableOpacity
+                        key={s.id}
+                        style={[
+                          styles.selectChip,
+                          selectedSource === s.id && (sourceType === 'farmer' ? styles.farmerChipActive : styles.vendorChipActive)
+                        ]}
+                        onPress={() => setSelectedSource(s.id)}
+                      >
+                        <Text style={[styles.selectText, selectedSource === s.id && styles.selectTextActive]}>
+                          {s.name}
+                        </Text>
+                        {s.mobile && (
+                          <Text style={[styles.selectSubtext, selectedSource === s.id && styles.selectTextActive]}>
+                            {s.mobile}
+                          </Text>
+                        )}
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </>
+              )}
+
+              {/* Manual Entry Toggle for Product */}
+              <View style={styles.manualToggle}>
+                <Text style={styles.manualToggleText}>
+                  {language === 'hi' ? 'उत्पाद मैन्युअल लिखें' : 'Write product manually'}
+                </Text>
+                <Switch
+                  value={useManualProduct}
+                  onValueChange={(v) => { setUseManualProduct(v); setSelectedProduct(''); }}
+                  trackColor={{ false: '#DDD', true: '#64B5F6' }}
+                  thumbColor={useManualProduct ? '#1976D2' : '#999'}
                 />
-                {productSearch.length > 0 && (
-                  <TouchableOpacity onPress={() => setProductSearch('')}>
-                    <Ionicons name="close-circle" size={18} color="#999" />
-                  </TouchableOpacity>
-                )}
               </View>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.selectScroll}>
-                {filteredProducts.map((p) => (
-                  <TouchableOpacity
-                    key={p.id}
-                    style={[styles.selectChip, selectedProduct === p.id && styles.productChipActive]}
-                    onPress={() => setSelectedProduct(p.id)}
-                  >
-                    <Text style={[styles.selectText, selectedProduct === p.id && styles.selectTextActive]}>
-                      {language === 'hi' && p.name_hi ? p.name_hi : p.name}
-                    </Text>
-                    <Text style={[styles.selectSubtext, selectedProduct === p.id && styles.selectTextActive]}>
-                      {p.unit}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
+
+              {useManualProduct ? (
+                <View style={styles.manualInputs}>
+                  <Input
+                    label={language === 'hi' ? 'उत्पाद का नाम' : 'Product Name'}
+                    placeholder={language === 'hi' ? 'उत्पाद नाम दर्ज करें' : 'Enter product name'}
+                    value={manualProductName}
+                    onChangeText={setManualProductName}
+                  />
+                  <View style={styles.unitRow}>
+                    <Text style={styles.unitLabel}>{language === 'hi' ? 'इकाई' : 'Unit'}:</Text>
+                    {['kg', 'quintal', 'piece', 'litre'].map((unit) => (
+                      <TouchableOpacity
+                        key={unit}
+                        style={[styles.unitChip, manualProductUnit === unit && styles.unitChipActive]}
+                        onPress={() => setManualProductUnit(unit)}
+                      >
+                        <Text style={[styles.unitText, manualProductUnit === unit && styles.unitTextActive]}>
+                          {unit}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              ) : (
+                <>
+                  {/* Product Search & Selection */}
+                  <Text style={styles.label}>
+                    {language === 'hi' ? 'उत्पाद चुनें' : 'Select Product'} *
+                  </Text>
+                  <View style={styles.searchBox}>
+                    <Ionicons name="search" size={18} color="#999" />
+                    <TextInput
+                      style={styles.searchInput}
+                      placeholder={language === 'hi' ? 'उत्पाद खोजें...' : 'Search products...'}
+                      value={productSearch}
+                      onChangeText={setProductSearch}
+                      placeholderTextColor="#999"
+                    />
+                    {productSearch.length > 0 && (
+                      <TouchableOpacity onPress={() => setProductSearch('')}>
+                        <Ionicons name="close-circle" size={18} color="#999" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.selectScroll}>
+                    {filteredProducts.map((p) => (
+                      <TouchableOpacity
+                        key={p.id}
+                        style={[styles.selectChip, selectedProduct === p.id && styles.productChipActive]}
+                        onPress={() => setSelectedProduct(p.id)}
+                      >
+                        <Text style={[styles.selectText, selectedProduct === p.id && styles.selectTextActive]}>
+                          {language === 'hi' && p.name_hi ? p.name_hi : p.name}
+                        </Text>
+                        <Text style={[styles.selectSubtext, selectedProduct === p.id && styles.selectTextActive]}>
+                          {p.unit}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </>
+              )}
 
               {/* Outlet Search & Selection */}
               <Text style={styles.label}>
@@ -610,298 +713,71 @@ export default function PurchaseScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F5F5F5',
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
-    backgroundColor: '#FFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E0E0E0',
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  subtitle: {
-    fontSize: 13,
-    color: '#666',
-    marginTop: 2,
-  },
-  addBtn: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#2E7D32',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  listContent: {
-    padding: 16,
-  },
-  purchaseCard: {
-    marginBottom: 12,
-  },
-  purchaseHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  sourceInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  sourceIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  sourceName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-  },
-  sourceType: {
-    fontSize: 12,
-    color: '#666',
-  },
-  statusBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  purchaseDetails: {
-    borderTopWidth: 1,
-    borderTopColor: '#E0E0E0',
-    paddingTop: 12,
-    gap: 6,
-  },
-  detailRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  detailLabel: {
-    fontSize: 13,
-    color: '#666',
-  },
-  detailValue: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: '#333',
-  },
-  purchaseFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    borderTopWidth: 1,
-    borderTopColor: '#E0E0E0',
-    paddingTop: 12,
-    marginTop: 8,
-  },
-  receiptNum: {
-    fontSize: 12,
-    color: '#666',
-  },
-  totalAmount: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#2E7D32',
-  },
-  emptyState: {
-    alignItems: 'center',
-    paddingVertical: 60,
-  },
-  emptyText: {
-    fontSize: 16,
-    color: '#999',
-    marginTop: 16,
-  },
-  // Modal styles
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'flex-end',
-  },
-  modalScrollContent: {
-    flexGrow: 1,
-    justifyContent: 'flex-end',
-  },
-  modalContent: {
-    backgroundColor: '#FFF',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 20,
-    maxHeight: '95%',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 8,
-    marginTop: 12,
-  },
-  sourceToggle: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 8,
-  },
-  sourceBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: '#2E7D32',
-    backgroundColor: '#FFF',
-  },
-  sourceBtnActive: {
-    backgroundColor: '#2E7D32',
-  },
-  vendorBtn: {
-    borderColor: '#7B1FA2',
-  },
-  vendorBtnActive: {
-    backgroundColor: '#7B1FA2',
-  },
-  sourceBtnText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#333',
-  },
-  sourceBtnTextActive: {
-    color: '#FFF',
-  },
-  searchBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F5F5F5',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginBottom: 8,
-    gap: 8,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 14,
-    color: '#333',
-  },
-  selectScroll: {
-    marginBottom: 8,
-    maxHeight: 70,
-  },
-  selectChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    backgroundColor: '#E8E8E8',
-    borderRadius: 10,
-    marginRight: 8,
-    minWidth: 80,
-  },
-  farmerChipActive: {
-    backgroundColor: '#2E7D32',
-  },
-  vendorChipActive: {
-    backgroundColor: '#7B1FA2',
-  },
-  productChipActive: {
-    backgroundColor: '#1976D2',
-  },
-  outletChipActive: {
-    backgroundColor: '#F57C00',
-  },
-  selectText: {
-    color: '#333',
-    fontWeight: '500',
-    fontSize: 13,
-  },
-  selectSubtext: {
-    color: '#666',
-    fontSize: 11,
-    marginTop: 2,
-  },
-  selectTextActive: {
-    color: '#FFF',
-  },
-  row: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  halfInput: {
-    flex: 1,
-  },
-  totalDisplay: {
-    backgroundColor: '#E8F5E9',
-    padding: 16,
-    borderRadius: 10,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginVertical: 12,
-  },
-  totalDisplayLabel: {
-    fontSize: 15,
-    color: '#2E7D32',
-    fontWeight: '500',
-  },
-  totalDisplayValue: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#2E7D32',
-  },
-  paymentModes: {
-    flexDirection: 'row',
-    gap: 8,
-    flexWrap: 'wrap',
-  },
-  modeBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#DDD',
-    backgroundColor: '#F9F9F9',
-  },
-  modeBtnActive: {
-    backgroundColor: '#2E7D32',
-    borderColor: '#2E7D32',
-  },
-  modeText: {
-    fontSize: 13,
-    color: '#666',
-    fontWeight: '500',
-  },
-  modeTextActive: {
-    color: '#FFF',
-  },
-  submitBtn: {
-    marginTop: 20,
-  },
+  container: { flex: 1, backgroundColor: '#F5F5F5' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#FFF', borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
+  title: { fontSize: 24, fontWeight: 'bold', color: '#333' },
+  subtitle: { fontSize: 13, color: '#666', marginTop: 2 },
+  addBtn: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#2E7D32', justifyContent: 'center', alignItems: 'center' },
+  listContent: { padding: 16 },
+  purchaseCard: { marginBottom: 12 },
+  purchaseHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  sourceInfo: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  sourceIcon: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
+  sourceName: { fontSize: 16, fontWeight: '600', color: '#333' },
+  sourceType: { fontSize: 12, color: '#666' },
+  statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
+  statusText: { fontSize: 12, fontWeight: '600' },
+  purchaseDetails: { borderTopWidth: 1, borderTopColor: '#E0E0E0', paddingTop: 12, gap: 6 },
+  detailRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  detailLabel: { fontSize: 13, color: '#666' },
+  detailValue: { fontSize: 13, fontWeight: '500', color: '#333' },
+  purchaseFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderTopWidth: 1, borderTopColor: '#E0E0E0', paddingTop: 12, marginTop: 8 },
+  receiptNum: { fontSize: 12, color: '#666' },
+  totalAmount: { fontSize: 18, fontWeight: 'bold', color: '#2E7D32' },
+  emptyState: { alignItems: 'center', paddingVertical: 60 },
+  emptyText: { fontSize: 16, color: '#999', marginTop: 16 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  modalScrollContent: { flexGrow: 1, justifyContent: 'flex-end' },
+  modalContent: { backgroundColor: '#FFF', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '95%' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  modalTitle: { fontSize: 20, fontWeight: 'bold', color: '#333' },
+  label: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 8, marginTop: 12 },
+  sourceToggle: { flexDirection: 'row', gap: 12, marginBottom: 8 },
+  sourceBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 12, borderRadius: 10, borderWidth: 2, borderColor: '#2E7D32', backgroundColor: '#FFF' },
+  sourceBtnActive: { backgroundColor: '#2E7D32' },
+  vendorBtn: { borderColor: '#7B1FA2' },
+  vendorBtnActive: { backgroundColor: '#7B1FA2' },
+  sourceBtnText: { fontSize: 15, fontWeight: '600', color: '#333' },
+  sourceBtnTextActive: { color: '#FFF' },
+  manualToggle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#F5F5F5', padding: 12, borderRadius: 8, marginTop: 8 },
+  manualToggleText: { fontSize: 13, color: '#666', flex: 1 },
+  manualInputs: { backgroundColor: '#FAFAFA', padding: 12, borderRadius: 8, marginTop: 8 },
+  unitRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginTop: 8 },
+  unitLabel: { fontSize: 13, color: '#666' },
+  unitChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, backgroundColor: '#E8E8E8' },
+  unitChipActive: { backgroundColor: '#1976D2' },
+  unitText: { fontSize: 13, color: '#666' },
+  unitTextActive: { color: '#FFF' },
+  searchBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F5F5F5', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 8, gap: 8 },
+  searchInput: { flex: 1, fontSize: 14, color: '#333' },
+  selectScroll: { marginBottom: 8, maxHeight: 70 },
+  selectChip: { paddingHorizontal: 14, paddingVertical: 8, backgroundColor: '#E8E8E8', borderRadius: 10, marginRight: 8, minWidth: 80 },
+  farmerChipActive: { backgroundColor: '#2E7D32' },
+  vendorChipActive: { backgroundColor: '#7B1FA2' },
+  productChipActive: { backgroundColor: '#1976D2' },
+  outletChipActive: { backgroundColor: '#F57C00' },
+  selectText: { color: '#333', fontWeight: '500', fontSize: 13 },
+  selectSubtext: { color: '#666', fontSize: 11, marginTop: 2 },
+  selectTextActive: { color: '#FFF' },
+  row: { flexDirection: 'row', gap: 12 },
+  halfInput: { flex: 1 },
+  totalDisplay: { backgroundColor: '#E8F5E9', padding: 16, borderRadius: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginVertical: 12 },
+  totalDisplayLabel: { fontSize: 15, color: '#2E7D32', fontWeight: '500' },
+  totalDisplayValue: { fontSize: 22, fontWeight: 'bold', color: '#2E7D32' },
+  paymentModes: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  modeBtn: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: '#DDD', backgroundColor: '#F9F9F9' },
+  modeBtnActive: { backgroundColor: '#2E7D32', borderColor: '#2E7D32' },
+  modeText: { fontSize: 13, color: '#666', fontWeight: '500' },
+  modeTextActive: { color: '#FFF' },
+  submitBtn: { marginTop: 20 },
 });
