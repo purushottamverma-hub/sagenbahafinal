@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -9,12 +9,14 @@ import {
   Modal,
   Alert,
   TextInput,
+  ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useSettingsStore } from '../../src/store/settingsStore';
 import { Card } from '../../src/components/Card';
 import { Button } from '../../src/components/Button';
+import { Input } from '../../src/components/Input';
 import api from '../../src/utils/api';
 
 interface Farmer {
@@ -24,6 +26,13 @@ interface Farmer {
   village?: string;
 }
 
+interface Vendor {
+  id: string;
+  name: string;
+  mobile?: string;
+  address?: string;
+}
+
 interface Product {
   id: string;
   name: string;
@@ -31,12 +40,17 @@ interface Product {
   unit: string;
 }
 
+interface Outlet {
+  id: string;
+  name: string;
+}
+
 interface Purchase {
   id: string;
-  farmer_id: string;
-  farmer_name: string;
-  product_id: string;
+  source_type: string;
+  source_name: string;
   product_name: string;
+  outlet_name: string;
   quantity: number;
   rate: number;
   total_amount: number;
@@ -48,29 +62,65 @@ interface Purchase {
 export default function PurchaseScreen() {
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [farmers, setFarmers] = useState<Farmer[]>([]);
+  const [vendors, setVendors] = useState<Vendor[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [loading, setLoading] = useState(false);
   const language = useSettingsStore((state) => state.language);
 
+  // Search states
+  const [sourceSearch, setSourceSearch] = useState('');
+  const [productSearch, setProductSearch] = useState('');
+  const [outletSearch, setOutletSearch] = useState('');
+
   // Form state
-  const [selectedFarmer, setSelectedFarmer] = useState('');
+  const [sourceType, setSourceType] = useState<'farmer' | 'vendor'>('farmer');
+  const [selectedSource, setSelectedSource] = useState('');
   const [selectedProduct, setSelectedProduct] = useState('');
+  const [selectedOutlet, setSelectedOutlet] = useState('');
   const [quantity, setQuantity] = useState('');
   const [rate, setRate] = useState('');
-  const [paymentStatus, setPaymentStatus] = useState<'paid' | 'credit'>('paid');
+  const [paymentMode, setPaymentMode] = useState<'cash' | 'online' | 'credit' | 'partial'>('cash');
+  const [cashAmount, setCashAmount] = useState('');
+  const [onlineAmount, setOnlineAmount] = useState('');
+  const [notes, setNotes] = useState('');
 
   const fetchData = async () => {
     try {
-      const [purchaseRes, farmerRes, productRes] = await Promise.all([
+      const [farmerPurchaseRes, vendorPurchaseRes, farmerRes, vendorRes, productRes, outletRes] = await Promise.all([
         api.get('/farmer-purchases'),
+        api.get('/vendor-procurement'),
         api.get('/farmers'),
+        api.get('/vendors'),
         api.get('/products'),
+        api.get('/outlets'),
       ]);
-      setPurchases(purchaseRes.data);
+      
+      // Combine and format purchases
+      const allPurchases: Purchase[] = [
+        ...farmerPurchaseRes.data.map((p: any) => ({
+          ...p,
+          source_type: 'farmer',
+          source_name: p.farmer_name,
+          outlet_name: p.outlet_name || 'N/A',
+        })),
+        ...vendorPurchaseRes.data.map((p: any) => ({
+          ...p,
+          source_type: 'vendor',
+          source_name: p.vendor_name,
+        })),
+      ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      
+      setPurchases(allPurchases);
       setFarmers(farmerRes.data);
+      setVendors(vendorRes.data);
       setProducts(productRes.data);
+      setOutlets(outletRes.data);
+      
+      // Set defaults
+      if (outletRes.data.length > 0) setSelectedOutlet(outletRes.data[0].id);
     } catch (error) {
       console.error('Failed to fetch data:', error);
     }
@@ -86,28 +136,92 @@ export default function PurchaseScreen() {
     setRefreshing(false);
   };
 
+  // Filtered lists based on search
+  const filteredSources = useMemo(() => {
+    const sources = sourceType === 'farmer' ? farmers : vendors;
+    if (!sourceSearch.trim()) return sources;
+    const query = sourceSearch.toLowerCase();
+    return sources.filter(s => 
+      s.name.toLowerCase().includes(query) || 
+      (s.mobile && s.mobile.includes(query))
+    );
+  }, [sourceType, farmers, vendors, sourceSearch]);
+
+  const filteredProducts = useMemo(() => {
+    if (!productSearch.trim()) return products;
+    const query = productSearch.toLowerCase();
+    return products.filter(p => 
+      p.name.toLowerCase().includes(query) || 
+      (p.name_hi && p.name_hi.includes(productSearch))
+    );
+  }, [products, productSearch]);
+
+  const filteredOutlets = useMemo(() => {
+    if (!outletSearch.trim()) return outlets;
+    const query = outletSearch.toLowerCase();
+    return outlets.filter(o => o.name.toLowerCase().includes(query));
+  }, [outlets, outletSearch]);
+
+  const totalAmount = parseFloat(quantity || '0') * parseFloat(rate || '0');
+
+  const calculateAmounts = () => {
+    const total = totalAmount;
+    const cash = parseFloat(cashAmount || '0');
+    const online = parseFloat(onlineAmount || '0');
+    
+    switch (paymentMode) {
+      case 'cash':
+        return { cash: total, online: 0, credit: 0 };
+      case 'online':
+        return { cash: 0, online: total, credit: 0 };
+      case 'credit':
+        return { cash: 0, online: 0, credit: total };
+      case 'partial':
+        return { cash, online, credit: Math.max(0, total - cash - online) };
+    }
+  };
+
   const handleSubmit = async () => {
-    if (!selectedFarmer || !selectedProduct || !quantity || !rate) {
+    if (!selectedSource || !selectedProduct || !selectedOutlet || !quantity || !rate) {
       Alert.alert(
         language === 'hi' ? 'त्रुटि' : 'Error',
-        language === 'hi' ? 'कृपया सभी आवश्यक फील्ड भरें' : 'Please fill all required fields'
+        language === 'hi' ? 'सभी आवश्यक फील्ड भरें' : 'Please fill all required fields'
       );
       return;
     }
 
+    const amounts = calculateAmounts();
     setLoading(true);
+
     try {
-      await api.post('/farmer-purchases', {
-        farmer_id: selectedFarmer,
-        product_id: selectedProduct,
-        quantity: parseFloat(quantity),
-        rate: parseFloat(rate),
-        payment_status: paymentStatus,
-      });
+      if (sourceType === 'farmer') {
+        // Farmer purchase
+        await api.post('/farmer-purchases', {
+          farmer_id: selectedSource,
+          product_id: selectedProduct,
+          quantity: parseFloat(quantity),
+          rate: parseFloat(rate),
+          payment_status: paymentMode === 'credit' ? 'credit' : 'paid',
+          outlet_id: selectedOutlet,
+        });
+      } else {
+        // Vendor procurement
+        await api.post('/vendor-procurement', {
+          vendor_id: selectedSource,
+          product_id: selectedProduct,
+          outlet_id: selectedOutlet,
+          quantity: parseFloat(quantity),
+          rate: parseFloat(rate),
+          payment_mode: paymentMode,
+          cash_amount: amounts.cash,
+          online_amount: amounts.online,
+          notes: notes || null,
+        });
+      }
 
       Alert.alert(
         language === 'hi' ? 'सफल' : 'Success',
-        language === 'hi' ? 'खरीद दर्ज की गई' : 'Purchase recorded successfully'
+        language === 'hi' ? 'खरीद दर्ज हो गई' : 'Purchase recorded successfully'
       );
 
       setShowModal(false);
@@ -116,7 +230,7 @@ export default function PurchaseScreen() {
     } catch (error: any) {
       Alert.alert(
         language === 'hi' ? 'त्रुटि' : 'Error',
-        error.response?.data?.detail || (language === 'hi' ? 'खरीद विफल' : 'Purchase failed')
+        error.response?.data?.detail || (language === 'hi' ? 'खरीद दर्ज करने में विफल' : 'Failed to record purchase')
       );
     } finally {
       setLoading(false);
@@ -124,29 +238,43 @@ export default function PurchaseScreen() {
   };
 
   const resetForm = () => {
-    setSelectedFarmer('');
+    setSelectedSource('');
     setSelectedProduct('');
     setQuantity('');
     setRate('');
-    setPaymentStatus('paid');
+    setPaymentMode('cash');
+    setCashAmount('');
+    setOnlineAmount('');
+    setNotes('');
+    setSourceSearch('');
+    setProductSearch('');
+    setOutletSearch('');
   };
 
   const renderPurchase = ({ item }: { item: Purchase }) => (
     <Card style={styles.purchaseCard}>
       <View style={styles.purchaseHeader}>
-        <View style={styles.purchaseIcon}>
-          <Ionicons name="arrow-down-circle" size={24} color="#1976D2" />
+        <View style={styles.sourceInfo}>
+          <View style={[
+            styles.sourceIcon,
+            { backgroundColor: item.source_type === 'farmer' ? '#E8F5E9' : '#F3E5F5' }
+          ]}>
+            <Ionicons
+              name={item.source_type === 'farmer' ? 'leaf' : 'storefront'}
+              size={20}
+              color={item.source_type === 'farmer' ? '#2E7D32' : '#7B1FA2'}
+            />
+          </View>
+          <View>
+            <Text style={styles.sourceName}>{item.source_name}</Text>
+            <Text style={styles.sourceType}>
+              {item.source_type === 'farmer' 
+                ? (language === 'hi' ? 'किसान' : 'Farmer')
+                : (language === 'hi' ? 'विक्रेता' : 'Vendor')
+              }
+            </Text>
+          </View>
         </View>
-        <View style={styles.purchaseInfo}>
-          <Text style={styles.farmerName}>{item.farmer_name}</Text>
-          <Text style={styles.productName}>{item.product_name}</Text>
-        </View>
-        <Text style={styles.amount}>₹{item.total_amount}</Text>
-      </View>
-      <View style={styles.purchaseDetails}>
-        <Text style={styles.detailText}>
-          {item.quantity} kg @ ₹{item.rate}/kg
-        </Text>
         <View style={[
           styles.statusBadge,
           { backgroundColor: item.payment_status === 'paid' ? '#E8F5E9' : '#FFF3E0' }
@@ -155,13 +283,39 @@ export default function PurchaseScreen() {
             styles.statusText,
             { color: item.payment_status === 'paid' ? '#2E7D32' : '#F57C00' }
           ]}>
-            {item.payment_status === 'paid'
+            {item.payment_status === 'paid' 
               ? (language === 'hi' ? 'भुगतान' : 'Paid')
-              : (language === 'hi' ? 'उधार' : 'Credit')}
+              : (language === 'hi' ? 'उधार' : 'Credit')
+            }
           </Text>
         </View>
       </View>
-      <Text style={styles.receiptText}>{item.receipt_number}</Text>
+
+      <View style={styles.purchaseDetails}>
+        <View style={styles.detailRow}>
+          <Text style={styles.detailLabel}>{language === 'hi' ? 'उत्पाद' : 'Product'}</Text>
+          <Text style={styles.detailValue}>{item.product_name}</Text>
+        </View>
+        <View style={styles.detailRow}>
+          <Text style={styles.detailLabel}>{language === 'hi' ? 'मात्रा' : 'Qty'}</Text>
+          <Text style={styles.detailValue}>{item.quantity}</Text>
+        </View>
+        <View style={styles.detailRow}>
+          <Text style={styles.detailLabel}>{language === 'hi' ? 'दर' : 'Rate'}</Text>
+          <Text style={styles.detailValue}>₹{item.rate}</Text>
+        </View>
+        {item.outlet_name && (
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>{language === 'hi' ? 'आउटलेट' : 'Outlet'}</Text>
+            <Text style={styles.detailValue}>{item.outlet_name}</Text>
+          </View>
+        )}
+      </View>
+
+      <View style={styles.purchaseFooter}>
+        <Text style={styles.receiptNum}>{item.receipt_number}</Text>
+        <Text style={styles.totalAmount}>₹{item.total_amount?.toFixed(2) || '0.00'}</Text>
+      </View>
     </Card>
   );
 
@@ -170,10 +324,10 @@ export default function PurchaseScreen() {
       <View style={styles.header}>
         <View>
           <Text style={styles.title}>
-            {language === 'hi' ? 'किसानों से खरीद' : 'Farmer Procurement'}
+            {language === 'hi' ? 'खरीद' : 'Procurement'}
           </Text>
           <Text style={styles.subtitle}>
-            {language === 'hi' ? 'किसानों से उपज की खरीद दर्ज करें' : 'Record produce purchases from farmers'}
+            {language === 'hi' ? 'किसान और विक्रेता से खरीद' : 'From Farmers & Vendors'}
           </Text>
         </View>
         <TouchableOpacity style={styles.addBtn} onPress={() => setShowModal(true)}>
@@ -187,7 +341,7 @@ export default function PurchaseScreen() {
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#2E7D32']} />
         }
         ListEmptyComponent={
           <View style={styles.emptyState}>
@@ -202,134 +356,245 @@ export default function PurchaseScreen() {
       {/* New Purchase Modal */}
       <Modal visible={showModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>
-                {language === 'hi' ? 'नई खरीद' : 'New Purchase'}
+          <ScrollView contentContainerStyle={styles.modalScrollContent}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>
+                  {language === 'hi' ? 'नई खरीद' : 'New Purchase'}
+                </Text>
+                <TouchableOpacity onPress={() => { setShowModal(false); resetForm(); }}>
+                  <Ionicons name="close" size={24} color="#666" />
+                </TouchableOpacity>
+              </View>
+
+              {/* Source Type Toggle */}
+              <Text style={styles.label}>
+                {language === 'hi' ? 'खरीद स्रोत' : 'Purchase From'} *
               </Text>
-              <TouchableOpacity onPress={() => setShowModal(false)}>
-                <Ionicons name="close" size={24} color="#666" />
-              </TouchableOpacity>
-            </View>
-
-            {/* Farmer Selection */}
-            <Text style={styles.label}>
-              {language === 'hi' ? 'किसान चुनें' : 'Select Farmer'} *
-            </Text>
-            <View style={styles.optionGrid}>
-              {farmers.slice(0, 6).map((farmer) => (
+              <View style={styles.sourceToggle}>
                 <TouchableOpacity
-                  key={farmer.id}
-                  style={[
-                    styles.optionBtn,
-                    selectedFarmer === farmer.id && styles.optionBtnActive,
-                  ]}
-                  onPress={() => setSelectedFarmer(farmer.id)}
+                  style={[styles.sourceBtn, sourceType === 'farmer' && styles.sourceBtnActive]}
+                  onPress={() => { setSourceType('farmer'); setSelectedSource(''); setSourceSearch(''); }}
                 >
-                  <Text style={[
-                    styles.optionText,
-                    selectedFarmer === farmer.id && styles.optionTextActive,
-                  ]} numberOfLines={1}>
-                    {farmer.name}
+                  <Ionicons name="leaf" size={20} color={sourceType === 'farmer' ? '#FFF' : '#2E7D32'} />
+                  <Text style={[styles.sourceBtnText, sourceType === 'farmer' && styles.sourceBtnTextActive]}>
+                    {language === 'hi' ? 'किसान' : 'Farmer'}
                   </Text>
                 </TouchableOpacity>
-              ))}
-            </View>
-
-            {/* Product Selection */}
-            <Text style={styles.label}>
-              {language === 'hi' ? 'उत्पाद चुनें' : 'Select Product'} *
-            </Text>
-            <View style={styles.optionGrid}>
-              {products.map((product) => (
                 <TouchableOpacity
-                  key={product.id}
-                  style={[
-                    styles.optionBtn,
-                    selectedProduct === product.id && styles.optionBtnActive,
-                  ]}
-                  onPress={() => setSelectedProduct(product.id)}
+                  style={[styles.sourceBtn, styles.vendorBtn, sourceType === 'vendor' && styles.vendorBtnActive]}
+                  onPress={() => { setSourceType('vendor'); setSelectedSource(''); setSourceSearch(''); }}
                 >
-                  <Text style={[
-                    styles.optionText,
-                    selectedProduct === product.id && styles.optionTextActive,
-                  ]} numberOfLines={1}>
-                    {language === 'hi' && product.name_hi ? product.name_hi : product.name}
+                  <Ionicons name="storefront" size={20} color={sourceType === 'vendor' ? '#FFF' : '#7B1FA2'} />
+                  <Text style={[styles.sourceBtnText, sourceType === 'vendor' && styles.sourceBtnTextActive]}>
+                    {language === 'hi' ? 'विक्रेता' : 'Vendor'}
                   </Text>
                 </TouchableOpacity>
-              ))}
-            </View>
+              </View>
 
-            {/* Quantity & Rate */}
-            <View style={styles.row}>
-              <View style={styles.halfWidth}>
-                <Text style={styles.label}>
-                  {language === 'hi' ? 'मात्रा (kg)' : 'Quantity (kg)'} *
-                </Text>
+              {/* Source Search & Selection */}
+              <Text style={styles.label}>
+                {sourceType === 'farmer' 
+                  ? (language === 'hi' ? 'किसान चुनें' : 'Select Farmer')
+                  : (language === 'hi' ? 'विक्रेता चुनें' : 'Select Vendor')
+                } *
+              </Text>
+              <View style={styles.searchBox}>
+                <Ionicons name="search" size={18} color="#999" />
                 <TextInput
-                  style={styles.input}
-                  value={quantity}
-                  onChangeText={setQuantity}
-                  keyboardType="numeric"
-                  placeholder="0"
+                  style={styles.searchInput}
+                  placeholder={language === 'hi' ? 'नाम या मोबाइल से खोजें...' : 'Search by name or mobile...'}
+                  value={sourceSearch}
+                  onChangeText={setSourceSearch}
+                  placeholderTextColor="#999"
                 />
+                {sourceSearch.length > 0 && (
+                  <TouchableOpacity onPress={() => setSourceSearch('')}>
+                    <Ionicons name="close-circle" size={18} color="#999" />
+                  </TouchableOpacity>
+                )}
               </View>
-              <View style={styles.halfWidth}>
-                <Text style={styles.label}>
-                  {language === 'hi' ? 'दर (₹/kg)' : 'Rate (₹/kg)'} *
-                </Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.selectScroll}>
+                {filteredSources.map((s) => (
+                  <TouchableOpacity
+                    key={s.id}
+                    style={[
+                      styles.selectChip,
+                      selectedSource === s.id && (sourceType === 'farmer' ? styles.farmerChipActive : styles.vendorChipActive)
+                    ]}
+                    onPress={() => setSelectedSource(s.id)}
+                  >
+                    <Text style={[
+                      styles.selectText,
+                      selectedSource === s.id && styles.selectTextActive
+                    ]}>
+                      {s.name}
+                    </Text>
+                    {s.mobile && (
+                      <Text style={[
+                        styles.selectSubtext,
+                        selectedSource === s.id && styles.selectTextActive
+                      ]}>
+                        {s.mobile}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+
+              {/* Product Search & Selection */}
+              <Text style={styles.label}>
+                {language === 'hi' ? 'उत्पाद चुनें' : 'Select Product'} *
+              </Text>
+              <View style={styles.searchBox}>
+                <Ionicons name="search" size={18} color="#999" />
                 <TextInput
-                  style={styles.input}
-                  value={rate}
-                  onChangeText={setRate}
-                  keyboardType="numeric"
-                  placeholder="0"
+                  style={styles.searchInput}
+                  placeholder={language === 'hi' ? 'उत्पाद खोजें...' : 'Search products...'}
+                  value={productSearch}
+                  onChangeText={setProductSearch}
+                  placeholderTextColor="#999"
                 />
+                {productSearch.length > 0 && (
+                  <TouchableOpacity onPress={() => setProductSearch('')}>
+                    <Ionicons name="close-circle" size={18} color="#999" />
+                  </TouchableOpacity>
+                )}
               </View>
-            </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.selectScroll}>
+                {filteredProducts.map((p) => (
+                  <TouchableOpacity
+                    key={p.id}
+                    style={[styles.selectChip, selectedProduct === p.id && styles.productChipActive]}
+                    onPress={() => setSelectedProduct(p.id)}
+                  >
+                    <Text style={[styles.selectText, selectedProduct === p.id && styles.selectTextActive]}>
+                      {language === 'hi' && p.name_hi ? p.name_hi : p.name}
+                    </Text>
+                    <Text style={[styles.selectSubtext, selectedProduct === p.id && styles.selectTextActive]}>
+                      {p.unit}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
 
-            {/* Total */}
-            {quantity && rate && (
-              <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>
-                  {language === 'hi' ? 'कुल' : 'Total'}:
-                </Text>
-                <Text style={styles.totalAmount}>
-                  ₹{(parseFloat(quantity) * parseFloat(rate)).toFixed(2)}
-                </Text>
+              {/* Outlet Search & Selection */}
+              <Text style={styles.label}>
+                {language === 'hi' ? 'आउटलेट (स्टॉक यहां जाएगा)' : 'Outlet (stock goes here)'} *
+              </Text>
+              <View style={styles.searchBox}>
+                <Ionicons name="search" size={18} color="#999" />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder={language === 'hi' ? 'आउटलेट खोजें...' : 'Search outlets...'}
+                  value={outletSearch}
+                  onChangeText={setOutletSearch}
+                  placeholderTextColor="#999"
+                />
+                {outletSearch.length > 0 && (
+                  <TouchableOpacity onPress={() => setOutletSearch('')}>
+                    <Ionicons name="close-circle" size={18} color="#999" />
+                  </TouchableOpacity>
+                )}
               </View>
-            )}
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.selectScroll}>
+                {filteredOutlets.map((o) => (
+                  <TouchableOpacity
+                    key={o.id}
+                    style={[styles.selectChip, selectedOutlet === o.id && styles.outletChipActive]}
+                    onPress={() => setSelectedOutlet(o.id)}
+                  >
+                    <Text style={[styles.selectText, selectedOutlet === o.id && styles.selectTextActive]}>
+                      {o.name}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
 
-            {/* Payment Status */}
-            <Text style={styles.label}>
-              {language === 'hi' ? 'भुगतान स्थिति' : 'Payment Status'}
-            </Text>
-            <View style={styles.paymentToggle}>
-              <TouchableOpacity
-                style={[styles.paymentBtn, paymentStatus === 'paid' && styles.paymentBtnActive]}
-                onPress={() => setPaymentStatus('paid')}
-              >
-                <Text style={[styles.paymentText, paymentStatus === 'paid' && styles.paymentTextActive]}>
-                  {language === 'hi' ? 'भुगतान' : 'Paid'}
+              {/* Quantity & Rate */}
+              <View style={styles.row}>
+                <View style={styles.halfInput}>
+                  <Input
+                    label={`${language === 'hi' ? 'मात्रा' : 'Quantity'} *`}
+                    placeholder="0"
+                    value={quantity}
+                    onChangeText={setQuantity}
+                    keyboardType="decimal-pad"
+                  />
+                </View>
+                <View style={styles.halfInput}>
+                  <Input
+                    label={`${language === 'hi' ? 'दर (₹)' : 'Rate (₹)'} *`}
+                    placeholder="0"
+                    value={rate}
+                    onChangeText={setRate}
+                    keyboardType="decimal-pad"
+                  />
+                </View>
+              </View>
+
+              {/* Total Display */}
+              <View style={styles.totalDisplay}>
+                <Text style={styles.totalDisplayLabel}>
+                  {language === 'hi' ? 'कुल राशि' : 'Total Amount'}
                 </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.paymentBtn, paymentStatus === 'credit' && styles.paymentBtnActiveCredit]}
-                onPress={() => setPaymentStatus('credit')}
-              >
-                <Text style={[styles.paymentText, paymentStatus === 'credit' && styles.paymentTextActive]}>
-                  {language === 'hi' ? 'उधार' : 'Credit'}
-                </Text>
-              </TouchableOpacity>
+                <Text style={styles.totalDisplayValue}>₹{totalAmount.toFixed(2)}</Text>
+              </View>
+
+              {/* Payment Mode */}
+              <Text style={styles.label}>
+                {language === 'hi' ? 'भुगतान मोड' : 'Payment Mode'}
+              </Text>
+              <View style={styles.paymentModes}>
+                {[
+                  { id: 'cash', label: language === 'hi' ? 'नकद' : 'Cash' },
+                  { id: 'online', label: language === 'hi' ? 'ऑनलाइन' : 'Online' },
+                  { id: 'credit', label: language === 'hi' ? 'उधार' : 'Credit' },
+                  { id: 'partial', label: language === 'hi' ? 'आंशिक' : 'Partial' },
+                ].map((mode) => (
+                  <TouchableOpacity
+                    key={mode.id}
+                    style={[styles.modeBtn, paymentMode === mode.id && styles.modeBtnActive]}
+                    onPress={() => setPaymentMode(mode.id as any)}
+                  >
+                    <Text style={[styles.modeText, paymentMode === mode.id && styles.modeTextActive]}>
+                      {mode.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {paymentMode === 'partial' && (
+                <View style={styles.row}>
+                  <View style={styles.halfInput}>
+                    <Input
+                      label={language === 'hi' ? 'नकद (₹)' : 'Cash (₹)'}
+                      placeholder="0"
+                      value={cashAmount}
+                      onChangeText={setCashAmount}
+                      keyboardType="decimal-pad"
+                    />
+                  </View>
+                  <View style={styles.halfInput}>
+                    <Input
+                      label={language === 'hi' ? 'ऑनलाइन (₹)' : 'Online (₹)'}
+                      placeholder="0"
+                      value={onlineAmount}
+                      onChangeText={setOnlineAmount}
+                      keyboardType="decimal-pad"
+                    />
+                  </View>
+                </View>
+              )}
+
+              <Button
+                title={language === 'hi' ? 'खरीद दर्ज करें' : 'Record Purchase'}
+                onPress={handleSubmit}
+                loading={loading}
+                style={styles.submitBtn}
+              />
             </View>
-
-            <Button
-              title={language === 'hi' ? 'खरीद दर्ज करें' : 'Record Purchase'}
-              onPress={handleSubmit}
-              loading={loading}
-              style={styles.submitBtn}
-            />
-          </View>
+          </ScrollView>
         </View>
       </Modal>
     </SafeAreaView>
@@ -346,6 +611,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: 16,
+    backgroundColor: '#FFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
   },
   title: {
     fontSize: 24,
@@ -353,7 +621,7 @@ const styles = StyleSheet.create({
     color: '#333',
   },
   subtitle: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#666',
     marginTop: 2,
   },
@@ -367,53 +635,35 @@ const styles = StyleSheet.create({
   },
   listContent: {
     padding: 16,
-    paddingTop: 0,
   },
   purchaseCard: {
     marginBottom: 12,
   },
   purchaseHeader: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: 12,
   },
-  purchaseIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#E3F2FD',
+  sourceInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  sourceIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
   },
-  purchaseInfo: {
-    flex: 1,
-  },
-  farmerName: {
+  sourceName: {
     fontSize: 16,
     fontWeight: '600',
     color: '#333',
   },
-  productName: {
-    fontSize: 14,
-    color: '#666',
-    marginTop: 2,
-  },
-  amount: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#1976D2',
-  },
-  purchaseDetails: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#F0F0F0',
-  },
-  detailText: {
-    fontSize: 14,
+  sourceType: {
+    fontSize: 12,
     color: '#666',
   },
   statusBadge: {
@@ -425,23 +675,60 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
-  receiptText: {
-    fontSize: 12,
-    color: '#999',
+  purchaseDetails: {
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+    paddingTop: 12,
+    gap: 6,
+  },
+  detailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  detailLabel: {
+    fontSize: 13,
+    color: '#666',
+  },
+  detailValue: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#333',
+  },
+  purchaseFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+    paddingTop: 12,
     marginTop: 8,
+  },
+  receiptNum: {
+    fontSize: 12,
+    color: '#666',
+  },
+  totalAmount: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#2E7D32',
   },
   emptyState: {
     alignItems: 'center',
-    paddingVertical: 48,
+    paddingVertical: 60,
   },
   emptyText: {
     fontSize: 16,
     color: '#999',
-    marginTop: 12,
+    marginTop: 16,
   },
+  // Modal styles
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalScrollContent: {
+    flexGrow: 1,
     justifyContent: 'flex-end',
   },
   modalContent: {
@@ -449,7 +736,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     padding: 20,
-    maxHeight: '90%',
+    maxHeight: '95%',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -469,90 +756,141 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     marginTop: 12,
   },
-  optionGrid: {
+  sourceToggle: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    gap: 12,
+    marginBottom: 8,
+  },
+  sourceBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
     gap: 8,
-  },
-  optionBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#DDD',
-    backgroundColor: '#F9F9F9',
-  },
-  optionBtnActive: {
-    backgroundColor: '#2E7D32',
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 2,
     borderColor: '#2E7D32',
+    backgroundColor: '#FFF',
   },
-  optionText: {
-    fontSize: 13,
+  sourceBtnActive: {
+    backgroundColor: '#2E7D32',
+  },
+  vendorBtn: {
+    borderColor: '#7B1FA2',
+  },
+  vendorBtnActive: {
+    backgroundColor: '#7B1FA2',
+  },
+  sourceBtnText: {
+    fontSize: 15,
+    fontWeight: '600',
     color: '#333',
   },
-  optionTextActive: {
+  sourceBtnTextActive: {
+    color: '#FFF',
+  },
+  searchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 8,
+    gap: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: '#333',
+  },
+  selectScroll: {
+    marginBottom: 8,
+    maxHeight: 70,
+  },
+  selectChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: '#E8E8E8',
+    borderRadius: 10,
+    marginRight: 8,
+    minWidth: 80,
+  },
+  farmerChipActive: {
+    backgroundColor: '#2E7D32',
+  },
+  vendorChipActive: {
+    backgroundColor: '#7B1FA2',
+  },
+  productChipActive: {
+    backgroundColor: '#1976D2',
+  },
+  outletChipActive: {
+    backgroundColor: '#F57C00',
+  },
+  selectText: {
+    color: '#333',
+    fontWeight: '500',
+    fontSize: 13,
+  },
+  selectSubtext: {
+    color: '#666',
+    fontSize: 11,
+    marginTop: 2,
+  },
+  selectTextActive: {
     color: '#FFF',
   },
   row: {
     flexDirection: 'row',
     gap: 12,
   },
-  halfWidth: {
+  halfInput: {
     flex: 1,
   },
-  input: {
-    borderWidth: 1,
-    borderColor: '#DDD',
+  totalDisplay: {
+    backgroundColor: '#E8F5E9',
+    padding: 16,
     borderRadius: 10,
-    padding: 14,
-    fontSize: 16,
-    backgroundColor: '#F9F9F9',
-  },
-  totalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 12,
-    padding: 12,
-    backgroundColor: '#E8F5E9',
-    borderRadius: 8,
+    marginVertical: 12,
   },
-  totalLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
+  totalDisplayLabel: {
+    fontSize: 15,
+    color: '#2E7D32',
+    fontWeight: '500',
   },
-  totalAmount: {
-    fontSize: 20,
+  totalDisplayValue: {
+    fontSize: 22,
     fontWeight: 'bold',
     color: '#2E7D32',
   },
-  paymentToggle: {
+  paymentModes: {
     flexDirection: 'row',
-    gap: 12,
+    gap: 8,
+    flexWrap: 'wrap',
   },
-  paymentBtn: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 10,
-    borderWidth: 2,
+  modeBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
     borderColor: '#DDD',
-    alignItems: 'center',
+    backgroundColor: '#F9F9F9',
   },
-  paymentBtnActive: {
+  modeBtnActive: {
     backgroundColor: '#2E7D32',
     borderColor: '#2E7D32',
   },
-  paymentBtnActiveCredit: {
-    backgroundColor: '#F57C00',
-    borderColor: '#F57C00',
-  },
-  paymentText: {
-    fontSize: 15,
-    fontWeight: '600',
+  modeText: {
+    fontSize: 13,
     color: '#666',
+    fontWeight: '500',
   },
-  paymentTextActive: {
+  modeTextActive: {
     color: '#FFF',
   },
   submitBtn: {
