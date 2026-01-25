@@ -657,19 +657,36 @@ async def create_product_request(request: ProductRequestBase, current_user: dict
     if current_user["role"] not in ["farmer", "agent"]:
         raise HTTPException(status_code=403, detail="Only farmers and agents can create product requests")
     
-    product = await db.products.find_one({"id": request.product_id})
-    if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
+    # Handle custom product for sell requests
+    product_name = None
+    if request.product_id == 'custom' and request.custom_product_name:
+        product_name = request.custom_product_name
+    else:
+        product = await db.products.find_one({"id": request.product_id})
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        product_name = product["name"]
+    
+    # Get outlet name if outlet_id provided
+    outlet_name = None
+    if request.outlet_id:
+        outlet = await db.outlets.find_one({"id": request.outlet_id})
+        if outlet:
+            outlet_name = outlet["name"]
     
     req_obj = ProductRequest(
         **request.dict(),
         farmer_id=current_user["id"],
         farmer_name=current_user.get("full_name"),
-        product_name=product["name"],
+        product_name=product_name,
         status="pending"
     )
     
-    await db.product_requests.insert_one(req_obj.dict())
+    # Add outlet_name to the document
+    req_dict = req_obj.dict()
+    req_dict["outlet_name"] = outlet_name
+    
+    await db.product_requests.insert_one(req_dict)
     return {"message": "Request submitted successfully", "request_id": req_obj.id}
 
 @api_router.get("/product-requests")
