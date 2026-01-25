@@ -192,12 +192,14 @@ export const translations = {
     dashboard: 'डैशबोर्ड',
     sales: 'बिक्री',
     stock: 'स्टॉक',
+    purchase: 'खरीद',
     customers: 'ग्राहक',
     farmers: 'किसान',
     outlets: 'आउटलेट',
     products: 'उत्पाद',
     reports: 'रिपोर्ट',
     settings: 'सेटिंग्स',
+    notifications: 'सूचनाएं',
     
     // Dashboard
     todaySales: 'आज की बिक्री',
