@@ -1563,6 +1563,366 @@ class AuthTester:
             self.log_result("Feature C", False, "Request failed", str(e))
             return False
 
+    # ===================== THREE NEW FEATURES TESTING (AS REQUESTED) =====================
+    
+    def test_notifications_system(self):
+        """Test Feature 1: Notifications System"""
+        print_test_header("Feature 1: Notifications System")
+        
+        if not self.admin_token:
+            self.log_result("Notifications System", False, "No admin token available")
+            return False
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.admin_token}"
+        }
+        
+        try:
+            # Test 1: GET /api/notifications - Get notifications for current user
+            response = self.session.get(f"{BASE_URL}/notifications", headers=headers)
+            print_info(f"GET /notifications - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                notifications = response.json()
+                self.log_result("GET /notifications", True, f"Retrieved {len(notifications)} notifications")
+            else:
+                self.log_result("GET /notifications", False, f"HTTP {response.status_code}: {response.text}")
+                return False
+            
+            # Test 2: GET /api/notifications/unread-count - Get unread count
+            response = self.session.get(f"{BASE_URL}/notifications/unread-count", headers=headers)
+            print_info(f"GET /notifications/unread-count - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                if "count" in data:
+                    self.log_result("GET /notifications/unread-count", True, f"Unread count: {data['count']}")
+                else:
+                    self.log_result("GET /notifications/unread-count", False, "No count in response")
+                    return False
+            else:
+                self.log_result("GET /notifications/unread-count", False, f"HTTP {response.status_code}: {response.text}")
+                return False
+            
+            # Test 3: PUT /api/notifications/mark-all-read - Mark all as read
+            response = self.session.put(f"{BASE_URL}/notifications/mark-all-read", headers=headers)
+            print_info(f"PUT /notifications/mark-all-read - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                self.log_result("PUT /notifications/mark-all-read", True, data.get("message", "Success"))
+            else:
+                self.log_result("PUT /notifications/mark-all-read", False, f"HTTP {response.status_code}: {response.text}")
+                return False
+            
+            self.log_result("Notifications System Complete", True, "All notification endpoints working")
+            return True
+            
+        except Exception as e:
+            self.log_result("Notifications System", False, "Request failed", str(e))
+            return False
+    
+    def test_shareholder_upgrade_system(self):
+        """Test Feature 2: Shareholder Upgrade System"""
+        print_test_header("Feature 2: Shareholder Upgrade System")
+        
+        # First register/login as farmer for testing
+        farmer_token = None
+        farmer_data = {
+            "username": "farmertest200",
+            "password": "test123",
+            "full_name": "Test Farmer 200",
+            "role": "farmer"
+        }
+        
+        try:
+            # Try to register farmer
+            response = self.session.post(f"{BASE_URL}/auth/register", json=farmer_data)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if "access_token" in data:
+                    farmer_token = data["access_token"]
+                    print_success("Farmer registration and auto-login successful")
+                else:
+                    # Try to login if registration failed due to existing user
+                    login_response = self.session.post(f"{BASE_URL}/auth/login", json={
+                        "username": farmer_data["username"],
+                        "password": farmer_data["password"]
+                    })
+                    
+                    if login_response.status_code == 200:
+                        login_data = login_response.json()
+                        if "access_token" in login_data:
+                            farmer_token = login_data["access_token"]
+                            print_success("Farmer login successful (user already exists)")
+            
+            if not farmer_token:
+                self.log_result("Shareholder Upgrade Setup", False, "Could not get farmer token")
+                return False
+            
+            farmer_headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {farmer_token}"
+            }
+            
+            admin_headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.admin_token}"
+            } if self.admin_token else None
+            
+            # Test 1: POST /api/shareholder-upgrade/request - Request shareholder upgrade
+            import base64
+            test_cert_data = base64.b64encode(b"test certificate data").decode()
+            
+            upgrade_request = {
+                "certificate_data": test_cert_data,
+                "certificate_filename": "cert.jpg"
+            }
+            
+            response = self.session.post(f"{BASE_URL}/shareholder-upgrade/request", 
+                                       json=upgrade_request, headers=farmer_headers)
+            print_info(f"POST /shareholder-upgrade/request - Status: {response.status_code}")
+            
+            request_id = None
+            if response.status_code == 200:
+                data = response.json()
+                if "request_id" in data:
+                    request_id = data["request_id"]
+                    self.log_result("POST /shareholder-upgrade/request", True, f"Request ID: {request_id}")
+                else:
+                    self.log_result("POST /shareholder-upgrade/request", False, "No request_id in response")
+                    return False
+            else:
+                self.log_result("POST /shareholder-upgrade/request", False, f"HTTP {response.status_code}: {response.text}")
+                return False
+            
+            # Test 2: GET /api/shareholder-upgrade/requests - Get own upgrade requests (farmer)
+            response = self.session.get(f"{BASE_URL}/shareholder-upgrade/requests", headers=farmer_headers)
+            print_info(f"GET /shareholder-upgrade/requests (Farmer) - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                requests_data = response.json()
+                self.log_result("GET /shareholder-upgrade/requests (Farmer)", True, f"Retrieved {len(requests_data)} requests")
+            else:
+                self.log_result("GET /shareholder-upgrade/requests (Farmer)", False, f"HTTP {response.status_code}: {response.text}")
+                return False
+            
+            if not admin_headers:
+                self.log_result("Shareholder Upgrade Admin Tests", False, "No admin token available")
+                return False
+            
+            # Test 3: GET /api/shareholder-upgrade/requests - Get all upgrade requests (admin)
+            response = self.session.get(f"{BASE_URL}/shareholder-upgrade/requests", headers=admin_headers)
+            print_info(f"GET /shareholder-upgrade/requests (Admin) - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                requests_data = response.json()
+                self.log_result("GET /shareholder-upgrade/requests (Admin)", True, f"Retrieved {len(requests_data)} requests")
+            else:
+                self.log_result("GET /shareholder-upgrade/requests (Admin)", False, f"HTTP {response.status_code}: {response.text}")
+                return False
+            
+            # Test 4: GET /api/shareholder-upgrade/pending-count - Get pending count
+            response = self.session.get(f"{BASE_URL}/shareholder-upgrade/pending-count", headers=admin_headers)
+            print_info(f"GET /shareholder-upgrade/pending-count - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                if "count" in data:
+                    self.log_result("GET /shareholder-upgrade/pending-count", True, f"Pending count: {data['count']}")
+                else:
+                    self.log_result("GET /shareholder-upgrade/pending-count", False, "No count in response")
+                    return False
+            else:
+                self.log_result("GET /shareholder-upgrade/pending-count", False, f"HTTP {response.status_code}: {response.text}")
+                return False
+            
+            # Test 5: PUT /api/shareholder-upgrade/{request_id}/approve - Approve request
+            if request_id:
+                response = self.session.put(f"{BASE_URL}/shareholder-upgrade/{request_id}/approve", 
+                                          headers=admin_headers,
+                                          params={"remark": "Approved for testing"})
+                print_info(f"PUT /shareholder-upgrade/{request_id}/approve - Status: {response.status_code}")
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    self.log_result("PUT /shareholder-upgrade/approve", True, data.get("message", "Success"))
+                else:
+                    self.log_result("PUT /shareholder-upgrade/approve", False, f"HTTP {response.status_code}: {response.text}")
+                    return False
+            
+            # Test 6: Test rejection flow with another request
+            response = self.session.post(f"{BASE_URL}/shareholder-upgrade/request", 
+                                       json=upgrade_request, headers=farmer_headers)
+            
+            if response.status_code == 200:
+                data = response.json()
+                reject_request_id = data.get("request_id")
+                
+                if reject_request_id:
+                    response = self.session.put(f"{BASE_URL}/shareholder-upgrade/{reject_request_id}/reject", 
+                                              headers=admin_headers,
+                                              params={"remark": "Rejected for testing"})
+                    print_info(f"PUT /shareholder-upgrade/{reject_request_id}/reject - Status: {response.status_code}")
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        self.log_result("PUT /shareholder-upgrade/reject", True, data.get("message", "Success"))
+                    else:
+                        self.log_result("PUT /shareholder-upgrade/reject", False, f"HTTP {response.status_code}: {response.text}")
+                        return False
+            
+            self.log_result("Shareholder Upgrade System Complete", True, "All shareholder upgrade endpoints working")
+            return True
+            
+        except Exception as e:
+            self.log_result("Shareholder Upgrade System", False, "Request failed", str(e))
+            return False
+    
+    def test_vendor_procurement_system(self):
+        """Test Feature 3: Vendor Procurement System"""
+        print_test_header("Feature 3: Vendor Procurement System")
+        
+        if not self.admin_token:
+            self.log_result("Vendor Procurement System", False, "No admin token available")
+            return False
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.admin_token}"
+        }
+        
+        try:
+            # Test 1: GET /api/vendors - Get vendors list
+            response = self.session.get(f"{BASE_URL}/vendors", headers=headers)
+            print_info(f"GET /vendors - Status: {response.status_code}")
+            
+            vendor_id = None
+            if response.status_code == 200:
+                vendors = response.json()
+                self.log_result("GET /vendors", True, f"Retrieved {len(vendors)} vendors")
+                
+                if vendors:
+                    vendor_id = vendors[0]["id"]
+                    print_info(f"Using vendor: {vendors[0]['name']}")
+                else:
+                    self.log_result("Vendor Procurement Setup", False, "No vendors available for testing")
+                    return False
+            else:
+                self.log_result("GET /vendors", False, f"HTTP {response.status_code}: {response.text}")
+                return False
+            
+            # Test 2: GET /api/products - Get products list
+            response = self.session.get(f"{BASE_URL}/products", headers=headers)
+            print_info(f"GET /products - Status: {response.status_code}")
+            
+            product_id = None
+            if response.status_code == 200:
+                products = response.json()
+                self.log_result("GET /products", True, f"Retrieved {len(products)} products")
+                
+                if products:
+                    product_id = products[0]["id"]
+                    print_info(f"Using product: {products[0]['name']}")
+                else:
+                    self.log_result("Vendor Procurement Setup", False, "No products available for testing")
+                    return False
+            else:
+                self.log_result("GET /products", False, f"HTTP {response.status_code}: {response.text}")
+                return False
+            
+            # Test 3: GET /api/outlets - Get outlets list
+            response = self.session.get(f"{BASE_URL}/outlets", headers=headers)
+            print_info(f"GET /outlets - Status: {response.status_code}")
+            
+            outlet_id = None
+            if response.status_code == 200:
+                outlets = response.json()
+                self.log_result("GET /outlets", True, f"Retrieved {len(outlets)} outlets")
+                
+                if outlets:
+                    outlet_id = outlets[0]["id"]
+                    print_info(f"Using outlet: {outlets[0]['name']}")
+                else:
+                    self.log_result("Vendor Procurement Setup", False, "No outlets available for testing")
+                    return False
+            else:
+                self.log_result("GET /outlets", False, f"HTTP {response.status_code}: {response.text}")
+                return False
+            
+            # Test 4: POST /api/vendor-procurement - Create vendor procurement
+            procurement_data = {
+                "vendor_id": vendor_id,
+                "product_id": product_id,
+                "outlet_id": outlet_id,
+                "quantity": 50,
+                "rate": 30,
+                "payment_mode": "cash",
+                "cash_amount": 1500,
+                "online_amount": 0
+            }
+            
+            response = self.session.post(f"{BASE_URL}/vendor-procurement", 
+                                       json=procurement_data, headers=headers)
+            print_info(f"POST /vendor-procurement - Status: {response.status_code}")
+            
+            procurement_id = None
+            if response.status_code == 200:
+                data = response.json()
+                if "procurement_id" in data:
+                    procurement_id = data["procurement_id"]
+                    receipt_number = data.get("receipt_number", "N/A")
+                    self.log_result("POST /vendor-procurement", True, f"Procurement ID: {procurement_id}, Receipt: {receipt_number}")
+                else:
+                    self.log_result("POST /vendor-procurement", False, "No procurement_id in response")
+                    return False
+            else:
+                self.log_result("POST /vendor-procurement", False, f"HTTP {response.status_code}: {response.text}")
+                return False
+            
+            # Test 5: GET /api/vendor-procurement - Get all procurements
+            response = self.session.get(f"{BASE_URL}/vendor-procurement", headers=headers)
+            print_info(f"GET /vendor-procurement - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                procurements = response.json()
+                self.log_result("GET /vendor-procurement", True, f"Retrieved {len(procurements)} procurement records")
+            else:
+                self.log_result("GET /vendor-procurement", False, f"HTTP {response.status_code}: {response.text}")
+                return False
+            
+            # Test 6: Verify stock was added to the outlet
+            response = self.session.get(f"{BASE_URL}/stock", headers=headers, params={"outlet_id": outlet_id})
+            print_info(f"GET /stock (verification) - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                stock_data = response.json()
+                
+                # Find the stock for our product
+                product_stock = None
+                for stock in stock_data:
+                    if stock["product_id"] == product_id:
+                        product_stock = stock
+                        break
+                
+                if product_stock:
+                    self.log_result("Stock Verification", True, f"Stock found for product: {product_stock['quantity']} units")
+                else:
+                    self.log_result("Stock Verification", False, "No stock found for the procured product")
+                    return False
+            else:
+                self.log_result("Stock Verification", False, f"HTTP {response.status_code}: {response.text}")
+                return False
+            
+            self.log_result("Vendor Procurement System Complete", True, "All vendor procurement endpoints working")
+            return True
+            
+        except Exception as e:
+            self.log_result("Vendor Procurement System", False, "Request failed", str(e))
+            return False
+
     def run_all_tests(self):
         """Run all authentication and CRUD tests"""
         print(f"{Colors.BOLD}FPO Management System - Authentication & CRUD Testing{Colors.ENDC}")
