@@ -115,9 +115,20 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   isAuthenticated: false,
   isLoading: true,
   
+  // Synchronous getter for the token (used by API interceptor)
+  getToken: () => {
+    return get().token;
+  },
+  
   setAuth: async (token: string, user: User) => {
+    logAuth('Setting auth', { user: user.username, role: user.role });
+    
     // Persist to storage first
-    await setStorage({ token, user, isAuthenticated: true });
+    const saved = await setStorage({ token, user, isAuthenticated: true });
+    
+    if (!saved) {
+      console.error('[AuthStore] Warning: Auth data may not be persisted properly');
+    }
     
     set({
       token,
@@ -125,9 +136,13 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       isAuthenticated: true,
       isLoading: false,
     });
+    
+    logAuth('Auth set successfully');
   },
   
   logout: async () => {
+    logAuth('Logging out');
+    
     // Clear storage first
     await clearStorage();
     
@@ -137,18 +152,31 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       isAuthenticated: false,
       isLoading: false,
     });
+    
+    logAuth('Logout complete');
   },
   
   hydrate: async () => {
-    const stored = await getStorage();
-    if (stored && stored.token && stored.user) {
-      set({
-        token: stored.token,
-        user: stored.user,
-        isAuthenticated: true,
-        isLoading: false,
-      });
-    } else {
+    logAuth('Hydrating auth state...');
+    
+    try {
+      const stored = await getStorage();
+      
+      if (stored && stored.token && stored.user) {
+        logAuth('Found stored auth', { user: stored.user.username });
+        
+        set({
+          token: stored.token,
+          user: stored.user,
+          isAuthenticated: true,
+          isLoading: false,
+        });
+      } else {
+        logAuth('No stored auth found');
+        set({ isLoading: false });
+      }
+    } catch (error) {
+      console.error('[AuthStore] Hydration error:', error);
       set({ isLoading: false });
     }
   },
