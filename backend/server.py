@@ -1187,8 +1187,13 @@ async def get_pending_transfer_count(current_user: dict = Depends(require_admin)
     return {"count": count}
 
 @api_router.put("/stock/transfer-requests/{request_id}/approve")
-async def approve_transfer_request(request_id: str, remark: Optional[str] = None, current_user: dict = Depends(require_admin)):
-    """Approve a stock transfer request - Admin only"""
+async def approve_transfer_request(
+    request_id: str, 
+    remark: Optional[str] = None, 
+    approved_quantity: Optional[float] = None,
+    current_user: dict = Depends(require_admin)
+):
+    """Approve a stock transfer request - Admin only. Can approve partial or modified quantity."""
     # Find the request
     transfer = await db.stock_transfer_requests.find_one({"id": request_id})
     if not transfer:
@@ -1197,23 +1202,29 @@ async def approve_transfer_request(request_id: str, remark: Optional[str] = None
     if transfer["status"] != "pending":
         raise HTTPException(status_code=400, detail="This request has already been processed")
     
+    # Use approved_quantity if provided, otherwise use original quantity
+    final_quantity = approved_quantity if approved_quantity is not None else transfer["quantity"]
+    
+    if final_quantity <= 0:
+        raise HTTPException(status_code=400, detail="Approved quantity must be greater than 0")
+    
     # Check stock again before approving
     stock = await db.stock.find_one({
         "product_id": transfer["product_id"],
         "outlet_id": transfer["from_outlet_id"]
     })
     
-    if not stock or stock["quantity"] < transfer["quantity"]:
-        raise HTTPException(status_code=400, detail="Insufficient stock in source outlet")
+    if not stock or stock["quantity"] < final_quantity:
+        raise HTTPException(status_code=400, detail=f"Insufficient stock. Available: {stock['quantity'] if stock else 0}")
     
     # Get admin details
     admin = await db.users.find_one({"id": current_user["id"]})
     
-    # Perform the actual stock transfer
+    # Perform the actual stock transfer with final_quantity
     # Deduct from source
     await db.stock.update_one(
         {"id": stock["id"]},
-        {"$inc": {"quantity": -transfer["quantity"]}, "$set": {"updated_at": datetime.utcnow()}}
+        {"$inc": {"quantity": -final_quantity}, "$set": {"updated_at": datetime.utcnow()}}
     )
     
     # Add to destination
@@ -1226,27 +1237,35 @@ async def approve_transfer_request(request_id: str, remark: Optional[str] = None
         await db.stock.update_one(
             {"id": dest_stock["id"]},
             {"$inc": {
-                "quantity": transfer["quantity"],
-                "stock_received": transfer["quantity"]
+                "quantity": final_quantity,
+                "stock_received": final_quantity
             }, "$set": {"updated_at": datetime.utcnow()}}
         )
     else:
         new_stock = Stock(
             product_id=transfer["product_id"],
             outlet_id=transfer["to_outlet_id"],
-            quantity=transfer["quantity"],
-            stock_received=transfer["quantity"]
+            quantity=final_quantity,
+            stock_received=final_quantity
         )
         await db.stock.insert_one(new_stock.dict())
+    
+    # Determine approval type for remark
+    approval_note = ""
+    if approved_quantity is not None and approved_quantity != transfer["quantity"]:
+        if approved_quantity < transfer["quantity"]:
+            approval_note = f"Partial approval: {final_quantity} of {transfer['quantity']} requested. "
+        else:
+            approval_note = f"Increased allocation: {final_quantity} (requested {transfer['quantity']}). "
     
     # Log the movement
     movement = StockMovement(
         product_id=transfer["product_id"],
         from_outlet_id=transfer["from_outlet_id"],
         to_outlet_id=transfer["to_outlet_id"],
-        quantity=transfer["quantity"],
+        quantity=final_quantity,
         movement_type="transfer_approved",
-        reason=f"Transfer request approved. Remark: {remark}" if remark else "Transfer request approved",
+        reason=f"{approval_note}Transfer request approved. {remark or ''}".strip(),
         created_by=current_user["id"]
     )
     await db.stock_movements.insert_one(movement.dict())
@@ -1256,14 +1275,29 @@ async def approve_transfer_request(request_id: str, remark: Optional[str] = None
         {"id": request_id},
         {"$set": {
             "status": "approved",
+            "approved_quantity": final_quantity,
             "approved_by": current_user["id"],
             "approved_by_name": admin.get("full_name", admin.get("username", "Admin")),
-            "admin_remark": remark,
+            "admin_remark": f"{approval_note}{remark or ''}".strip() or "Approved",
             "updated_at": datetime.utcnow()
         }}
     )
     
-    return {"message": "Transfer request approved and stock transferred successfully"}
+    # Notify the requester
+    await create_notification(
+        transfer["requested_by"],
+        "Stock Transfer Approved!",
+        f"Your request for {transfer['product_name']} has been approved. {approval_note}Transferred: {final_quantity} units.",
+        "approval",
+        "stock_transfer",
+        request_id
+    )
+    
+    return {
+        "message": "Transfer request approved and stock transferred successfully",
+        "approved_quantity": final_quantity,
+        "requested_quantity": transfer["quantity"]
+    }
 
 @api_router.put("/stock/transfer-requests/{request_id}/reject")
 async def reject_transfer_request(request_id: str, remark: str = "", current_user: dict = Depends(require_admin)):
