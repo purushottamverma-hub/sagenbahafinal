@@ -133,6 +133,9 @@ backend:
       - working: true
         agent: "main"
         comment: "Login, register, change-password all working"
+      - working: true
+        agent: "testing"
+        comment: "Comprehensive authentication testing completed successfully. All 8 test cases passed: 1) Admin login with correct credentials (admin/admin123) works and returns proper token and user object with role. 2) Login with wrong password correctly returns 401. 3) Login with non-existent user correctly returns 401. 4) Farmer registration auto-logs in and returns active status with token. 5) Agent registration returns pending status without token (requires admin approval). 6) Protected endpoints (/api/dashboard) correctly return 403 without token. 7) Protected endpoints work correctly with valid token. 8) Invalid tokens are properly rejected with 401. Admin user exists and system is fully functional."
 
   - task: "Products CRUD API"
     implemented: true
