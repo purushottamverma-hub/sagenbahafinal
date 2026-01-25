@@ -1237,6 +1237,16 @@ async def update_farmer(farmer_id: str, updates: dict, current_user: dict = Depe
         raise HTTPException(status_code=404, detail="Farmer not found")
     return {"message": "Farmer updated successfully"}
 
+@api_router.delete("/farmers/{farmer_id}")
+async def delete_farmer(farmer_id: str, current_user: dict = Depends(require_admin)):
+    result = await db.farmers.update_one(
+        {"id": farmer_id},
+        {"$set": {"is_active": False, "updated_at": datetime.utcnow()}}
+    )
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Farmer not found")
+    return {"message": "Farmer deactivated successfully"}
+
 @api_router.get("/farmers/{farmer_id}/ledger")
 async def get_farmer_ledger(farmer_id: str, current_user: dict = Depends(require_admin)):
     """Get farmer ledger with all transactions"""
