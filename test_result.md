@@ -121,6 +121,9 @@ backend:
       - working: true
         agent: "main"
         comment: "Added POST/GET/PUT/DELETE endpoints for /api/vendors. Tested via curl - all working."
+      - working: true
+        agent: "testing"
+        comment: "Comprehensive CRUD testing completed successfully. All 4 operations tested: 1) GET /api/vendors - Retrieved 1 existing vendor successfully. 2) POST /api/vendors - Created new vendor 'Test Vendor' with mobile 9876543210 and address - returned valid ID. 3) PUT /api/vendors/{id} - Updated vendor name to 'Test Vendor Updated' successfully. 4) DELETE /api/vendors/{id} - Soft deleted vendor successfully. All endpoints return proper HTTP 200 status codes and expected response structures."
   
   - task: "Authentication endpoints"
     implemented: true
