@@ -314,6 +314,10 @@ export default function ManageScreen() {
       setProductUnit(item.unit || 'kg');
       setProductCategory(item.category || 'produce');
       setProductDescription(item.description || '');
+    } else if (activeTab === 'vendors') {
+      setVendorName(item.name || '');
+      setVendorMobile(item.mobile || '');
+      setVendorAddress(item.address || '');
     }
     setShowModal(true);
   };
