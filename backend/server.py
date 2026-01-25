@@ -376,6 +376,12 @@ class FarmerPurchaseCreate(BaseModel):
     quantity: float
     rate: float
     payment_status: str = "paid"  # paid or credit
+    outlet_id: Optional[str] = None
+    # Manual entry fields for quick transactions
+    manual_farmer_name: Optional[str] = None
+    manual_farmer_mobile: Optional[str] = None
+    manual_product_name: Optional[str] = None
+    manual_product_unit: Optional[str] = None
 
 class FarmerPurchase(FarmerPurchaseBase):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
