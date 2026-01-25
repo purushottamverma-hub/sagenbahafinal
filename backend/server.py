@@ -982,10 +982,15 @@ async def get_consolidated_stock(current_user: dict = Depends(require_admin)):
     ]
     results = await db.stock.aggregate(pipeline).to_list(1000)
     
-    # Enrich with product info
+    # Batch fetch products to avoid N+1 query problem
+    product_ids = [r["_id"] for r in results]
+    products_list = await db.products.find({"id": {"$in": product_ids}}).to_list(1000)
+    products_map = {p["id"]: p for p in products_list}
+    
+    # Enrich with product info using cached data
     consolidated = []
     for r in results:
-        product = await db.products.find_one({"id": r["_id"]})
+        product = products_map.get(r["_id"])
         if product:
             consolidated.append({
                 "product_id": r["_id"],
