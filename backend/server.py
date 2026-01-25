@@ -1966,10 +1966,20 @@ async def get_stock_report(outlet_id: Optional[str] = None, current_user: dict =
     
     stocks = await db.stock.find(query).to_list(1000)
     
+    # Batch fetch products and outlets to avoid N+1 query
+    product_ids = list(set(s.get("product_id") for s in stocks if s.get("product_id")))
+    outlet_ids = list(set(s.get("outlet_id") for s in stocks if s.get("outlet_id")))
+    
+    products_list = await db.products.find({"id": {"$in": product_ids}}).to_list(1000) if product_ids else []
+    outlets_list = await db.outlets.find({"id": {"$in": outlet_ids}}).to_list(1000) if outlet_ids else []
+    
+    products_map = {p["id"]: p for p in products_list}
+    outlets_map = {o["id"]: o for o in outlets_list}
+    
     result = []
     for s in stocks:
-        product = await db.products.find_one({"id": s["product_id"]})
-        outlet = await db.outlets.find_one({"id": s["outlet_id"]})
+        product = products_map.get(s.get("product_id"))
+        outlet = outlets_map.get(s.get("outlet_id"))
         result.append({
             **s,
             "product_name": product["name"] if product else "Unknown",
