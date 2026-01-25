@@ -301,11 +301,15 @@ frontend:
 
   - task: "Login/Signup Screen"
     implemented: true
-    working: true
+    working: false
     file: "/app/frontend/app/(auth)/login.tsx"
-    stuck_count: 0
+    stuck_count: 1
     priority: "high"
     needs_retesting: false
+    status_history:
+      - working: false
+        agent: "testing"
+        comment: "Login screen UI working correctly - language toggle (EN/Hindi) functional, form fields work, mobile responsive design good. However, login flow FAILS - clicking login button or pressing Enter does not authenticate user or redirect to admin dashboard. Backend API confirmed working (curl test successful with admin/admin123). Issue is in frontend login button click handler or form submission. URL remains at /login instead of redirecting to /(admin). Console shows no login attempt logs, suggesting click event not triggering handleLogin function."
 
   - task: "Agent Purchase Screen"
     implemented: true
