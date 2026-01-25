@@ -1422,6 +1422,49 @@ async def record_farmer_payment(payment: FarmerPaymentCreate, current_user: dict
     
     return {"message": "Payment recorded successfully"}
 
+# ===================== VENDOR ROUTES =====================
+
+@api_router.post("/vendors", response_model=Vendor)
+async def create_vendor(vendor: VendorCreate, current_user: dict = Depends(require_admin)):
+    """Create a new vendor"""
+    vendor_obj = Vendor(**vendor.dict())
+    await db.vendors.insert_one(vendor_obj.dict())
+    return vendor_obj
+
+@api_router.get("/vendors", response_model=List[Vendor])
+async def get_vendors(current_user: dict = Depends(get_current_user)):
+    """Get all active vendors"""
+    vendors = await db.vendors.find({"is_active": True}).to_list(1000)
+    return [Vendor(**v) for v in vendors]
+
+@api_router.get("/vendors/{vendor_id}", response_model=Vendor)
+async def get_vendor(vendor_id: str, current_user: dict = Depends(get_current_user)):
+    """Get a specific vendor"""
+    vendor = await db.vendors.find_one({"id": vendor_id})
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    return Vendor(**vendor)
+
+@api_router.put("/vendors/{vendor_id}")
+async def update_vendor(vendor_id: str, updates: dict, current_user: dict = Depends(require_admin)):
+    """Update a vendor"""
+    updates["updated_at"] = datetime.utcnow()
+    result = await db.vendors.update_one({"id": vendor_id}, {"$set": updates})
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    return {"message": "Vendor updated successfully"}
+
+@api_router.delete("/vendors/{vendor_id}")
+async def delete_vendor(vendor_id: str, current_user: dict = Depends(require_admin)):
+    """Soft delete a vendor"""
+    result = await db.vendors.update_one(
+        {"id": vendor_id},
+        {"$set": {"is_active": False, "updated_at": datetime.utcnow()}}
+    )
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    return {"message": "Vendor deactivated successfully"}
+
 # ===================== DASHBOARD & REPORTS =====================
 
 @api_router.get("/dashboard")
