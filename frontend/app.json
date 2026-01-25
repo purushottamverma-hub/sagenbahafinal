@@ -41,7 +41,7 @@
       "typedRoutes": true
     },
     "extra": {
-      "expoHostname": "https://agrisync.preview.emergentagent.com"
+      "expoHostname": "https://harvest-hub-198.preview.emergentagent.com"
     }
   }
 }
