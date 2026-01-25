@@ -87,6 +87,14 @@ export default function PurchaseScreen() {
   const [onlineAmount, setOnlineAmount] = useState('');
   const [notes, setNotes] = useState('');
 
+  // Manual entry states
+  const [useManualSource, setUseManualSource] = useState(false);
+  const [manualSourceName, setManualSourceName] = useState('');
+  const [manualSourceMobile, setManualSourceMobile] = useState('');
+  const [useManualProduct, setUseManualProduct] = useState(false);
+  const [manualProductName, setManualProductName] = useState('');
+  const [manualProductUnit, setManualProductUnit] = useState('kg');
+
   const fetchData = async () => {
     try {
       const [farmerPurchaseRes, vendorPurchaseRes, farmerRes, vendorRes, productRes, outletRes] = await Promise.all([
