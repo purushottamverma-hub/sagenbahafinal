@@ -1978,6 +1978,7 @@ async def get_stock_report(outlet_id: Optional[str] = None, current_user: dict =
     
     result = []
     for s in stocks:
+        s.pop('_id', None)  # Remove MongoDB _id
         product = products_map.get(s.get("product_id"))
         outlet = outlets_map.get(s.get("outlet_id"))
         result.append({
