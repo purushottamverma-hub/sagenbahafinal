@@ -1934,9 +1934,14 @@ async def get_sales_report(
     total_online = sum(s.get("online_amount", 0) for s in sales)
     total_credit = sum(s.get("credit_amount", 0) for s in sales)
     
+    # Batch fetch outlets to avoid N+1 query
+    outlet_ids = list(set(s.get("outlet_id") for s in sales if s.get("outlet_id")))
+    outlets_list = await db.outlets.find({"id": {"$in": outlet_ids}}).to_list(1000) if outlet_ids else []
+    outlets_map = {o["id"]: o for o in outlets_list}
+    
     # Enrich with outlet names
     for sale in sales:
-        outlet = await db.outlets.find_one({"id": sale["outlet_id"]})
+        outlet = outlets_map.get(sale.get("outlet_id"))
         sale["outlet_name"] = outlet["name"] if outlet else "Unknown"
     
     return {
