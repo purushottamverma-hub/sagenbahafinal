@@ -1928,6 +1928,10 @@ async def get_sales_report(
     
     sales = await db.sales.find(query).sort("created_at", -1).to_list(1000)
     
+    # Remove MongoDB _id from all sales
+    for sale in sales:
+        sale.pop('_id', None)
+    
     # Summary
     total_amount = sum(s.get("total_amount", 0) for s in sales)
     total_cash = sum(s.get("cash_amount", 0) for s in sales)
