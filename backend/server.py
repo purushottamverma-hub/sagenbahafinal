@@ -1334,9 +1334,27 @@ async def create_farmer_purchase(purchase: FarmerPurchaseCreate, current_user: d
     return purchase_obj
 
 @api_router.get("/farmer-purchases")
-async def get_farmer_purchases(current_user: dict = Depends(get_current_user)):
-    """Get all farmer purchases"""
-    purchases = await db.farmer_purchases.find().sort("created_at", -1).to_list(1000)
+async def get_farmer_purchases(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    farmer_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get all farmer purchases with optional date filtering"""
+    query = {}
+    
+    if farmer_id:
+        query["farmer_id"] = farmer_id
+    
+    if start_date:
+        query["created_at"] = {"$gte": datetime.fromisoformat(start_date)}
+    if end_date:
+        if "created_at" in query:
+            query["created_at"]["$lte"] = datetime.fromisoformat(end_date) + timedelta(days=1)
+        else:
+            query["created_at"] = {"$lte": datetime.fromisoformat(end_date) + timedelta(days=1)}
+    
+    purchases = await db.farmer_purchases.find(query).sort("created_at", -1).to_list(1000)
     # Convert MongoDB documents to dict without _id
     result = []
     for p in purchases:
