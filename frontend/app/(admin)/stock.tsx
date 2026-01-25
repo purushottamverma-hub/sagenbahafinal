@@ -310,30 +310,48 @@ export default function StockScreen() {
   };
 
   // Fallback for platforms that don't support Alert.prompt
-  const handleApproveSimple = async (requestId: string) => {
-    Alert.alert(
-      language === 'hi' ? 'स्थानांतरण अनुमोदित करें?' : 'Approve Transfer?',
-      language === 'hi' ? 'क्या आप इस स्थानांतरण अनुरोध को अनुमोदित करना चाहते हैं?' : 'Do you want to approve this transfer request?',
-      [
-        { text: language === 'hi' ? 'रद्द करें' : 'Cancel', style: 'cancel' },
-        {
-          text: language === 'hi' ? 'अनुमोदित करें' : 'Approve',
-          onPress: async () => {
-            setSubmitting(true);
-            try {
-              await api.put(`/stock/transfer-requests/${requestId}/approve`);
-              Alert.alert(t('success'), language === 'hi' ? 'अनुरोध अनुमोदित और स्टॉक स्थानांतरित' : 'Request approved and stock transferred');
-              fetchTransferRequests(activeRequestTab === 'pending' ? 'pending' : undefined);
-              fetchData();
-            } catch (error: any) {
-              Alert.alert(t('error'), error.response?.data?.detail || 'Failed to approve');
-            } finally {
-              setSubmitting(false);
-            }
-          },
-        },
-      ]
-    );
+  const handleApproveSimple = async (request: TransferRequest) => {
+    setApprovalRequest(request);
+    setApprovalQuantity(request.quantity.toString());
+    setApprovalRemark('');
+    setShowApprovalModal(true);
+  };
+
+  const submitApproval = async () => {
+    if (!approvalRequest) return;
+    
+    const qty = parseFloat(approvalQuantity);
+    if (isNaN(qty) || qty <= 0) {
+      Alert.alert(t('error'), language === 'hi' ? 'वैध मात्रा दर्ज करें' : 'Enter valid quantity');
+      return;
+    }
+    
+    setSubmitting(true);
+    try {
+      const params = new URLSearchParams();
+      if (approvalRemark) params.append('remark', approvalRemark);
+      if (qty !== approvalRequest.quantity) params.append('approved_quantity', qty.toString());
+      
+      const url = `/stock/transfer-requests/${approvalRequest.id}/approve${params.toString() ? '?' + params.toString() : ''}`;
+      await api.put(url);
+      
+      let message = language === 'hi' ? 'अनुरोध अनुमोदित और स्टॉक स्थानांतरित' : 'Request approved and stock transferred';
+      if (qty !== approvalRequest.quantity) {
+        message = language === 'hi' 
+          ? `${qty} इकाई अनुमोदित (अनुरोधित: ${approvalRequest.quantity})`
+          : `Approved ${qty} units (requested: ${approvalRequest.quantity})`;
+      }
+      
+      Alert.alert(t('success'), message);
+      setShowApprovalModal(false);
+      setApprovalRequest(null);
+      fetchTransferRequests(activeRequestTab === 'pending' ? 'pending' : undefined);
+      fetchData();
+    } catch (error: any) {
+      Alert.alert(t('error'), error.response?.data?.detail || 'Failed to approve');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleRejectSimple = async (requestId: string) => {
