@@ -1040,6 +1040,191 @@ async def report_damage(request: StockDamageRequest, current_user: dict = Depend
     
     return {"message": "Damage reported successfully"}
 
+# ===================== STOCK TRANSFER REQUEST SYSTEM =====================
+
+@api_router.post("/stock/transfer-request")
+async def create_transfer_request(request: StockTransferRequestCreate, current_user: dict = Depends(get_current_user)):
+    """Create a stock transfer request (any user can request, admin approval needed)"""
+    # Get product details
+    product = await db.products.find_one({"id": request.product_id, "is_active": True})
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    # Get outlet details
+    from_outlet = await db.outlets.find_one({"id": request.from_outlet_id, "is_active": True})
+    to_outlet = await db.outlets.find_one({"id": request.to_outlet_id, "is_active": True})
+    
+    if not from_outlet or not to_outlet:
+        raise HTTPException(status_code=404, detail="Outlet not found")
+    
+    if request.from_outlet_id == request.to_outlet_id:
+        raise HTTPException(status_code=400, detail="Source and destination outlets must be different")
+    
+    # Check available stock
+    stock = await db.stock.find_one({
+        "product_id": request.product_id,
+        "outlet_id": request.from_outlet_id
+    })
+    
+    if not stock or stock["quantity"] < request.quantity:
+        raise HTTPException(status_code=400, detail="Insufficient stock in source outlet")
+    
+    # Get user details
+    user = await db.users.find_one({"id": current_user["id"]})
+    
+    # Create transfer request
+    transfer_request = StockTransferRequest(
+        product_id=request.product_id,
+        product_name=product["name"],
+        from_outlet_id=request.from_outlet_id,
+        from_outlet_name=from_outlet["name"],
+        to_outlet_id=request.to_outlet_id,
+        to_outlet_name=to_outlet["name"],
+        quantity=request.quantity,
+        reason=request.reason,
+        status="pending",
+        requested_by=current_user["id"],
+        requested_by_name=user.get("full_name", user.get("username", "Unknown"))
+    )
+    
+    await db.stock_transfer_requests.insert_one(transfer_request.dict())
+    
+    return {"message": "Transfer request created successfully", "request_id": transfer_request.id}
+
+@api_router.get("/stock/transfer-requests")
+async def get_transfer_requests(status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Get stock transfer requests - Admin sees all, others see their own"""
+    query = {}
+    
+    if current_user["role"] != "admin":
+        query["requested_by"] = current_user["id"]
+    
+    if status:
+        query["status"] = status
+    
+    requests = await db.stock_transfer_requests.find(query).sort("created_at", -1).to_list(500)
+    
+    # Remove _id from results
+    result = []
+    for r in requests:
+        r.pop('_id', None)
+        result.append(r)
+    
+    return result
+
+@api_router.get("/stock/transfer-requests/pending-count")
+async def get_pending_transfer_count(current_user: dict = Depends(require_admin)):
+    """Get count of pending transfer requests - Admin only"""
+    count = await db.stock_transfer_requests.count_documents({"status": "pending"})
+    return {"count": count}
+
+@api_router.put("/stock/transfer-requests/{request_id}/approve")
+async def approve_transfer_request(request_id: str, remark: Optional[str] = None, current_user: dict = Depends(require_admin)):
+    """Approve a stock transfer request - Admin only"""
+    # Find the request
+    transfer = await db.stock_transfer_requests.find_one({"id": request_id})
+    if not transfer:
+        raise HTTPException(status_code=404, detail="Transfer request not found")
+    
+    if transfer["status"] != "pending":
+        raise HTTPException(status_code=400, detail="This request has already been processed")
+    
+    # Check stock again before approving
+    stock = await db.stock.find_one({
+        "product_id": transfer["product_id"],
+        "outlet_id": transfer["from_outlet_id"]
+    })
+    
+    if not stock or stock["quantity"] < transfer["quantity"]:
+        raise HTTPException(status_code=400, detail="Insufficient stock in source outlet")
+    
+    # Get admin details
+    admin = await db.users.find_one({"id": current_user["id"]})
+    
+    # Perform the actual stock transfer
+    # Deduct from source
+    await db.stock.update_one(
+        {"id": stock["id"]},
+        {"$inc": {"quantity": -transfer["quantity"]}, "$set": {"updated_at": datetime.utcnow()}}
+    )
+    
+    # Add to destination
+    dest_stock = await db.stock.find_one({
+        "product_id": transfer["product_id"],
+        "outlet_id": transfer["to_outlet_id"]
+    })
+    
+    if dest_stock:
+        await db.stock.update_one(
+            {"id": dest_stock["id"]},
+            {"$inc": {
+                "quantity": transfer["quantity"],
+                "stock_received": transfer["quantity"]
+            }, "$set": {"updated_at": datetime.utcnow()}}
+        )
+    else:
+        new_stock = Stock(
+            product_id=transfer["product_id"],
+            outlet_id=transfer["to_outlet_id"],
+            quantity=transfer["quantity"],
+            stock_received=transfer["quantity"]
+        )
+        await db.stock.insert_one(new_stock.dict())
+    
+    # Log the movement
+    movement = StockMovement(
+        product_id=transfer["product_id"],
+        from_outlet_id=transfer["from_outlet_id"],
+        to_outlet_id=transfer["to_outlet_id"],
+        quantity=transfer["quantity"],
+        movement_type="transfer_approved",
+        reason=f"Transfer request approved. Remark: {remark}" if remark else "Transfer request approved",
+        created_by=current_user["id"]
+    )
+    await db.stock_movements.insert_one(movement.dict())
+    
+    # Update the request status
+    await db.stock_transfer_requests.update_one(
+        {"id": request_id},
+        {"$set": {
+            "status": "approved",
+            "approved_by": current_user["id"],
+            "approved_by_name": admin.get("full_name", admin.get("username", "Admin")),
+            "admin_remark": remark,
+            "updated_at": datetime.utcnow()
+        }}
+    )
+    
+    return {"message": "Transfer request approved and stock transferred successfully"}
+
+@api_router.put("/stock/transfer-requests/{request_id}/reject")
+async def reject_transfer_request(request_id: str, remark: str = "", current_user: dict = Depends(require_admin)):
+    """Reject a stock transfer request - Admin only"""
+    # Find the request
+    transfer = await db.stock_transfer_requests.find_one({"id": request_id})
+    if not transfer:
+        raise HTTPException(status_code=404, detail="Transfer request not found")
+    
+    if transfer["status"] != "pending":
+        raise HTTPException(status_code=400, detail="This request has already been processed")
+    
+    # Get admin details
+    admin = await db.users.find_one({"id": current_user["id"]})
+    
+    # Update the request status
+    await db.stock_transfer_requests.update_one(
+        {"id": request_id},
+        {"$set": {
+            "status": "rejected",
+            "approved_by": current_user["id"],
+            "approved_by_name": admin.get("full_name", admin.get("username", "Admin")),
+            "admin_remark": remark or "Request rejected",
+            "updated_at": datetime.utcnow()
+        }}
+    )
+    
+    return {"message": "Transfer request rejected"}
+
 # ===================== CUSTOMER ROUTES =====================
 
 @api_router.post("/customers", response_model=Customer)
