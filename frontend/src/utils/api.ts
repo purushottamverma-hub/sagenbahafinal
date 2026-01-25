@@ -3,30 +3,66 @@ import { Platform } from 'react-native';
 import { useAuthStore } from '../store/authStore';
 import Constants from 'expo-constants';
 
-// Get backend URL - handle different environments
+// Get backend URL - handle different environments with robust fallbacks
 const getBackendUrl = (): string => {
-  // For deployed app, use the environment variable or relative URL
+  // Debug logging to help diagnose issues
+  const logDebug = (source: string, url: string | undefined) => {
+    if (__DEV__) {
+      console.log(`[API] Backend URL from ${source}:`, url);
+    }
+  };
+
+  // Priority 1: EXPO_PUBLIC_BACKEND_URL from environment
   const envUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
-  
-  if (envUrl) {
-    return envUrl;
+  if (envUrl && envUrl.trim() !== '') {
+    logDebug('EXPO_PUBLIC_BACKEND_URL', envUrl);
+    return envUrl.trim();
   }
-  
-  // For web, use relative path (same origin)
+
+  // Priority 2: Expo Constants (works in built APK)
+  const expoHostname = Constants.expoConfig?.extra?.expoHostname 
+    || Constants.manifest?.extra?.expoHostname
+    || Constants.manifest2?.extra?.expoClient?.extra?.expoHostname;
+  if (expoHostname && expoHostname.trim() !== '') {
+    logDebug('expoHostname', expoHostname);
+    return expoHostname.trim();
+  }
+
+  // Priority 3: Check EXPO_PACKAGER_HOSTNAME for native builds
+  const packagerHostname = process.env.EXPO_PACKAGER_HOSTNAME;
+  if (packagerHostname && packagerHostname.trim() !== '') {
+    logDebug('EXPO_PACKAGER_HOSTNAME', packagerHostname);
+    return packagerHostname.trim();
+  }
+
+  // Priority 4: For web, use relative path (same origin)
   if (Platform.OS === 'web') {
+    logDebug('web-relative', '(empty - same origin)');
     return '';
   }
-  
-  // For native apps, try to get from expo config
-  const expoUrl = Constants.expoConfig?.extra?.backendUrl;
-  if (expoUrl) {
-    return expoUrl;
+
+  // Priority 5: Use linkingUri for development
+  const linkingUri = Constants.linkingUri;
+  if (linkingUri) {
+    try {
+      const url = new URL(linkingUri);
+      const baseUrl = `${url.protocol}//${url.host}`;
+      logDebug('linkingUri', baseUrl);
+      return baseUrl;
+    } catch (e) {
+      // Ignore parsing errors
+    }
   }
-  
+
+  // Fallback: Empty string (will fail gracefully)
+  console.warn('[API] No backend URL configured - API calls may fail');
   return '';
 };
 
 const BACKEND_URL = getBackendUrl();
+
+// Log the final URL on app start
+console.log(`[API] Using backend URL: ${BACKEND_URL || '(relative)'}`);
 
 export const api = axios.create({
   baseURL: `${BACKEND_URL}/api`,
