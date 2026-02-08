@@ -2378,10 +2378,25 @@ async def approve_shareholder_upgrade(request_id: str, remark: Optional[str] = N
         }}
     )
     
-    # Update the user to be a shareholder
+    # Update the user to be a shareholder with folio number and share value
+    user_update = {
+        "is_shareholder": True, 
+        "updated_at": datetime.utcnow()
+    }
+    if upgrade.get("folio_number"):
+        user_update["folio_number"] = upgrade["folio_number"]
+    if upgrade.get("share_value"):
+        user_update["share_value"] = upgrade["share_value"]
+    
     await db.users.update_one(
         {"id": upgrade["user_id"]},
-        {"$set": {"is_shareholder": True, "updated_at": datetime.utcnow()}}
+        {"$set": user_update}
+    )
+    
+    # Also update farmer record if exists
+    await db.farmers.update_one(
+        {"user_id": upgrade["user_id"]},
+        {"$set": user_update}
     )
     
     # Notify the farmer
