@@ -487,8 +487,14 @@ export default function RequestsScreen() {
               <Text style={styles.label}>
                 {language === 'hi' ? 'आउटलेट चुनें' : 'Select Outlet'} *
               </Text>
+              <TextInput
+                style={[styles.input, { marginBottom: 8 }]}
+                placeholder={language === 'hi' ? 'आउटलेट खोजें...' : 'Search outlets...'}
+                value={outletSearch}
+                onChangeText={setOutletSearch}
+              />
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.outletScroll}>
-                {outlets.map((outlet) => (
+                {filteredOutlets.map((outlet) => (
                   <TouchableOpacity
                     key={outlet.id}
                     style={[
