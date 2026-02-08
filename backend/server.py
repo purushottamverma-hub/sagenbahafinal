@@ -276,6 +276,8 @@ class FarmerBase(BaseModel):
     mobile: Optional[str] = None
     is_member: bool = False
     is_shareholder: bool = False
+    folio_number: Optional[str] = None  # Share certificate folio number
+    share_value: Optional[float] = None  # Value of shares held
     share_certificate_url: Optional[str] = None
     is_active: bool = True
 
