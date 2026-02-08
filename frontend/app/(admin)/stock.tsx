@@ -571,6 +571,23 @@ export default function StockScreen() {
         ))}
       </ScrollView>
 
+      {/* Product Search */}
+      <View style={styles.searchContainer}>
+        <Ionicons name="search" size={20} color="#666" style={styles.searchIcon} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder={language === 'hi' ? 'उत्पाद खोजें...' : 'Search products...'}
+          value={productSearch}
+          onChangeText={setProductSearch}
+          placeholderTextColor="#999"
+        />
+        {productSearch.length > 0 && (
+          <TouchableOpacity onPress={() => setProductSearch('')}>
+            <Ionicons name="close-circle" size={20} color="#999" />
+          </TouchableOpacity>
+        )}
+      </View>
+
       {/* Consolidated View */}
       {selectedOutlet === 'all' && (
         <View style={styles.consolidatedSection}>
