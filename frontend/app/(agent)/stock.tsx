@@ -853,4 +853,11 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontWeight: '500',
   },
+  directionBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
 });
