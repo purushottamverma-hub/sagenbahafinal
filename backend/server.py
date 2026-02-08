@@ -2428,20 +2428,35 @@ async def create_vendor_procurement(procurement: VendorProcurementBase, current_
     if current_user["role"] not in ["admin", "agent"]:
         raise HTTPException(status_code=403, detail="Only admin or agent can record vendor procurement")
     
-    # Validate vendor
-    vendor = await db.vendors.find_one({"id": procurement.vendor_id, "is_active": True})
-    if not vendor:
-        raise HTTPException(status_code=404, detail="Vendor not found")
+    # Handle manual vendor entry
+    vendor_name = procurement.manual_vendor_name
+    vendor_id = procurement.vendor_id
+    if procurement.vendor_id != 'manual':
+        vendor = await db.vendors.find_one({"id": procurement.vendor_id, "is_active": True})
+        if not vendor:
+            raise HTTPException(status_code=404, detail="Vendor not found")
+        vendor_name = vendor["name"]
+    elif not procurement.manual_vendor_name:
+        raise HTTPException(status_code=400, detail="Manual vendor name required")
     
-    # Validate product
-    product = await db.products.find_one({"id": procurement.product_id, "is_active": True})
-    if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
+    # Handle manual product entry
+    product_name = procurement.manual_product_name
+    product_unit = procurement.manual_product_unit or 'kg'
+    product_id = procurement.product_id
+    if procurement.product_id != 'manual':
+        product = await db.products.find_one({"id": procurement.product_id, "is_active": True})
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        product_name = product["name"]
+        product_unit = product.get("unit", "kg")
+    elif not procurement.manual_product_name:
+        raise HTTPException(status_code=400, detail="Manual product name required")
     
     # Validate outlet
     outlet = await db.outlets.find_one({"id": procurement.outlet_id, "is_active": True})
     if not outlet:
         raise HTTPException(status_code=404, detail="Outlet not found")
+    outlet_name = outlet["name"]
     
     # Calculate total and credit
     total_amount = procurement.quantity * procurement.rate
@@ -2455,11 +2470,19 @@ async def create_vendor_procurement(procurement: VendorProcurementBase, current_
     
     # Create procurement record
     proc_obj = VendorProcurement(
-        **procurement.dict(),
+        vendor_id=vendor_id,
+        vendor_name=vendor_name,
+        product_id=product_id,
+        product_name=product_name,
+        outlet_id=procurement.outlet_id,
+        outlet_name=outlet_name,
+        quantity=procurement.quantity,
+        rate=procurement.rate,
+        payment_mode=procurement.payment_mode,
+        cash_amount=procurement.cash_amount,
+        online_amount=procurement.online_amount,
+        notes=procurement.notes,
         receipt_number=receipt_number,
-        vendor_name=vendor["name"],
-        product_name=product["name"],
-        outlet_name=outlet["name"],
         total_amount=total_amount,
         credit_amount=credit_amount,
         payment_status=payment_status,
@@ -2468,54 +2491,57 @@ async def create_vendor_procurement(procurement: VendorProcurementBase, current_
     
     await db.vendor_procurement.insert_one(proc_obj.dict())
     
-    # Add stock to the outlet
-    existing_stock = await db.stock.find_one({
-        "product_id": procurement.product_id,
-        "outlet_id": procurement.outlet_id
-    })
+    # Add stock to the outlet (only if product is not manual)
+    if product_id != 'manual':
+        existing_stock = await db.stock.find_one({
+            "product_id": product_id,
+            "outlet_id": procurement.outlet_id
+        })
+        
+        if existing_stock:
+            await db.stock.update_one(
+                {"id": existing_stock["id"]},
+                {"$inc": {
+                    "quantity": procurement.quantity,
+                    "stock_received": procurement.quantity
+                }, "$set": {"updated_at": datetime.utcnow()}}
+            )
+        else:
+            new_stock = Stock(
+                product_id=product_id,
+                outlet_id=procurement.outlet_id,
+                quantity=procurement.quantity,
+                stock_received=procurement.quantity
+            )
+            await db.stock.insert_one(new_stock.dict())
+        
+        # Log stock movement
+        movement = StockMovement(
+            product_id=product_id,
+            to_outlet_id=procurement.outlet_id,
+            quantity=procurement.quantity,
+            movement_type="vendor_procurement",
+            reason=f"Vendor procurement from {vendor_name}. Receipt: {receipt_number}",
+            created_by=current_user["id"]
+        )
+        await db.stock_movements.insert_one(movement.dict())
     
-    if existing_stock:
-        await db.stock.update_one(
-            {"id": existing_stock["id"]},
+    # Update vendor ledger only if not manual entry
+    if vendor_id != 'manual':
+        await db.vendors.update_one(
+            {"id": vendor_id},
             {"$inc": {
-                "quantity": procurement.quantity,
-                "stock_received": procurement.quantity
+                "total_purchases": total_amount,
+                "total_paid": paid_amount,
+                "outstanding_dues": credit_amount
             }, "$set": {"updated_at": datetime.utcnow()}}
         )
-    else:
-        new_stock = Stock(
-            product_id=procurement.product_id,
-            outlet_id=procurement.outlet_id,
-            quantity=procurement.quantity,
-            stock_received=procurement.quantity
-        )
-        await db.stock.insert_one(new_stock.dict())
-    
-    # Update vendor ledger
-    await db.vendors.update_one(
-        {"id": procurement.vendor_id},
-        {"$inc": {
-            "total_purchases": total_amount,
-            "total_paid": paid_amount,
-            "outstanding_dues": credit_amount
-        }, "$set": {"updated_at": datetime.utcnow()}}
-    )
-    
-    # Log stock movement
-    movement = StockMovement(
-        product_id=procurement.product_id,
-        to_outlet_id=procurement.outlet_id,
-        quantity=procurement.quantity,
-        movement_type="vendor_procurement",
-        reason=f"Vendor procurement from {vendor['name']}. Receipt: {receipt_number}",
-        created_by=current_user["id"]
-    )
-    await db.stock_movements.insert_one(movement.dict())
     
     return {
         "message": "Vendor procurement recorded successfully",
         "receipt_number": receipt_number,
-        "procurement_id": proc_obj.id
+        "procurement_id": proc_obj.id,
+        "stock_updated": product_id != 'manual'
     }
 
 @api_router.get("/vendor-procurement")
