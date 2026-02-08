@@ -439,6 +439,15 @@ export default function AgentSalesScreen() {
                   />
                 )}
 
+                {/* Mobile Number - always visible */}
+                <Input
+                  label={language === 'hi' ? 'मोबाइल नंबर (वैकल्पिक)' : 'Mobile Number (optional)'}
+                  placeholder={language === 'hi' ? 'मोबाइल नंबर दर्ज करें' : 'Enter mobile number'}
+                  value={customerMobile}
+                  onChangeText={setCustomerMobile}
+                  keyboardType="phone-pad"
+                />
+
                 {/* Payment Mode */}
                 <Text style={styles.label}>{t('paymentMode')}</Text>
                 <View style={styles.paymentModes}>
