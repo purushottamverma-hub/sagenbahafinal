@@ -1820,7 +1820,7 @@ async def create_farmer_purchase_alt(purchase: FarmerPurchaseCreate, current_use
         
         # Record stock movement
         movement = {
-            "id": str(uuid4()),
+            "id": str(uuid.uuid4()),
             "product_id": product_id,
             "from_outlet_id": None,
             "to_outlet_id": outlet_id,
