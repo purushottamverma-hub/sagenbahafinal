@@ -160,10 +160,12 @@ export default function AgentSalesScreen() {
     setSaleItems([]);
     setSelectedCustomer('');
     setCustomerName('');
+    setCustomerMobile('');
     setPaymentMode('cash');
     setCashAmount('');
     setOnlineAmount('');
     setDiscount('');
+    setProductSearch('');
   };
 
   const handleCreateSale = async () => {
