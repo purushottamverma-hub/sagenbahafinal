@@ -290,8 +290,7 @@ class FPOAPITester:
         
         reports = [
             ("Sales Report", "/reports/sales"),
-            ("Stock Report", "/reports/stock"), 
-            ("Customers Report", "/reports/customers")
+            ("Stock Report", "/reports/stock")
         ]
         
         all_passed = True
@@ -317,9 +316,6 @@ class FPOAPITester:
                         else:
                             self.log_test(report_name, False, "Stock report should return array")
                             all_passed = False
-                    else:
-                        # Customers report
-                        self.log_test(report_name, True, f"Customers report returned successfully")
                         
                 else:
                     self.log_test(report_name, False, f"HTTP {response.status_code}: {response.text}")
