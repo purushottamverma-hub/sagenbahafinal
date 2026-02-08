@@ -1710,13 +1710,38 @@ async def get_farmer_purchases(
 @api_router.post("/farmer-purchases")
 async def create_farmer_purchase_alt(purchase: FarmerPurchaseCreate, current_user: dict = Depends(get_current_user)):
     """Record produce purchase from farmer (alternative endpoint)"""
-    farmer = await db.farmers.find_one({"id": purchase.farmer_id})
-    if not farmer:
-        raise HTTPException(status_code=404, detail="Farmer not found")
     
-    product = await db.products.find_one({"id": purchase.product_id})
-    if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
+    # Handle manual farmer entry
+    farmer_name = purchase.manual_farmer_name
+    farmer_id = purchase.farmer_id
+    if purchase.farmer_id != 'manual':
+        farmer = await db.farmers.find_one({"id": purchase.farmer_id})
+        if not farmer:
+            raise HTTPException(status_code=404, detail="Farmer not found")
+        farmer_name = farmer["name"]
+    elif not purchase.manual_farmer_name:
+        raise HTTPException(status_code=400, detail="Manual farmer name required")
+    
+    # Handle manual product entry
+    product_name = purchase.manual_product_name
+    product_unit = purchase.manual_product_unit or 'kg'
+    product_id = purchase.product_id
+    if purchase.product_id != 'manual':
+        product = await db.products.find_one({"id": purchase.product_id})
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        product_name = product["name"]
+        product_unit = product.get("unit", "kg")
+    elif not purchase.manual_product_name:
+        raise HTTPException(status_code=400, detail="Manual product name required")
+    
+    # Validate outlet if provided
+    outlet_id = purchase.outlet_id
+    outlet_name = None
+    if outlet_id:
+        outlet = await db.outlets.find_one({"id": outlet_id})
+        if outlet:
+            outlet_name = outlet["name"]
     
     receipt_number = await generate_receipt_number()
     total = purchase.quantity * purchase.rate
@@ -1724,10 +1749,10 @@ async def create_farmer_purchase_alt(purchase: FarmerPurchaseCreate, current_use
     payment_mode = "cash" if purchase.payment_status == "paid" else "credit"
     
     purchase_obj = FarmerPurchase(
-        farmer_id=purchase.farmer_id,
-        farmer_name=farmer["name"],
-        product_id=purchase.product_id,
-        product_name=product["name"],
+        farmer_id=farmer_id,
+        farmer_name=farmer_name,
+        product_id=product_id,
+        product_name=product_name,
         quantity=purchase.quantity,
         rate=purchase.rate,
         total_amount=total,
@@ -1736,26 +1761,77 @@ async def create_farmer_purchase_alt(purchase: FarmerPurchaseCreate, current_use
         cash_amount=total if purchase.payment_status == "paid" else 0,
         credit_amount=total if purchase.payment_status == "credit" else 0,
         receipt_number=receipt_number,
-        created_by=current_user["id"]
+        created_by=current_user["id"],
+        outlet_id=outlet_id,
+        outlet_name=outlet_name
     )
     await db.farmer_purchases.insert_one(purchase_obj.dict())
     
-    # Update farmer ledger
-    paid_amount = purchase_obj.cash_amount + purchase_obj.online_amount
-    await db.farmers.update_one(
-        {"id": purchase.farmer_id},
-        {"$inc": {
-            "total_supplied": purchase.quantity,
-            "total_payable": total,
-            "total_paid": paid_amount,
-            "outstanding_dues": purchase_obj.credit_amount
-        }, "$set": {"updated_at": datetime.utcnow()}}
-    )
+    # Update farmer ledger only if not manual entry
+    if purchase.farmer_id != 'manual':
+        paid_amount = purchase_obj.cash_amount + purchase_obj.online_amount
+        await db.farmers.update_one(
+            {"id": purchase.farmer_id},
+            {"$inc": {
+                "total_supplied": purchase.quantity,
+                "total_payable": total,
+                "total_paid": paid_amount,
+                "outstanding_dues": purchase_obj.credit_amount
+            }, "$set": {"updated_at": datetime.utcnow()}}
+        )
+    
+    # UPDATE STOCK - Add to outlet's stock after procurement
+    if outlet_id and product_id != 'manual':
+        existing_stock = await db.stock.find_one({
+            "product_id": product_id,
+            "outlet_id": outlet_id
+        })
+        
+        if existing_stock:
+            await db.stock.update_one(
+                {"id": existing_stock["id"]},
+                {"$inc": {
+                    "quantity": purchase.quantity,
+                    "stock_received": purchase.quantity
+                }, "$set": {"updated_at": datetime.utcnow()}}
+            )
+        else:
+            # Create new stock record
+            from uuid import uuid4
+            stock_obj = {
+                "id": str(uuid4()),
+                "product_id": product_id,
+                "outlet_id": outlet_id,
+                "quantity": purchase.quantity,
+                "opening_stock": purchase.quantity,
+                "stock_received": purchase.quantity,
+                "stock_sold": 0,
+                "stock_damaged": 0,
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow()
+            }
+            await db.stock.insert_one(stock_obj)
+        
+        # Record stock movement
+        movement = {
+            "id": str(uuid4()),
+            "product_id": product_id,
+            "from_outlet_id": None,
+            "to_outlet_id": outlet_id,
+            "quantity": purchase.quantity,
+            "movement_type": "farmer_procurement",
+            "reference_id": purchase_obj.id,
+            "notes": f"Procurement from farmer: {farmer_name}",
+            "created_by": current_user["id"],
+            "created_at": datetime.utcnow()
+        }
+        await db.stock_movements.insert_one(movement)
     
     return {
         "message": "Purchase recorded successfully",
         "receipt_number": receipt_number,
-        "total_amount": total
+        "total_amount": total,
+        "stock_updated": outlet_id is not None and product_id != 'manual'
     }
 
 @api_router.post("/farmers/payment")
