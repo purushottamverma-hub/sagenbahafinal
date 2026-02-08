@@ -356,6 +356,8 @@ class ShareholderUpgradeRequest(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: str
     user_name: str
+    folio_number: Optional[str] = None  # Share certificate folio number
+    share_value: Optional[float] = None  # Value of shares held
     certificate_data: Optional[str] = None  # Base64 encoded certificate image
     certificate_filename: Optional[str] = None
     status: str = "pending"  # pending, approved, rejected
