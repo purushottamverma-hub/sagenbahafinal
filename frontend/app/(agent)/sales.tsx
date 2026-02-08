@@ -64,12 +64,24 @@ export default function AgentSalesScreen() {
   // New sale state
   const [selectedCustomer, setSelectedCustomer] = useState<string>('');
   const [customerName, setCustomerName] = useState('');
+  const [customerMobile, setCustomerMobile] = useState('');  // New: mobile number
   const [saleItems, setSaleItems] = useState<SaleItem[]>([]);
   const [paymentMode, setPaymentMode] = useState('cash');
   const [cashAmount, setCashAmount] = useState('');
   const [onlineAmount, setOnlineAmount] = useState('');
   const [discount, setDiscount] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [productSearch, setProductSearch] = useState('');  // New: product search
+
+  // Filter products based on search
+  const filteredProducts = React.useMemo(() => {
+    if (!productSearch.trim()) return products;
+    const query = productSearch.toLowerCase();
+    return products.filter(p => 
+      p.name.toLowerCase().includes(query) || 
+      (p.name_hi && p.name_hi.toLowerCase().includes(query))
+    );
+  }, [products, productSearch]);
 
   const fetchData = async () => {
     try {
