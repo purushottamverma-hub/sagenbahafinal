@@ -317,10 +317,16 @@ export default function AgentSalesScreen() {
           </View>
 
           <ScrollView style={styles.modalContent}>
-            {/* Products */}
+            {/* Product Search */}
             <Text style={styles.label}>{t('products')}</Text>
+            <Input
+              placeholder={language === 'hi' ? 'उत्पाद खोजें...' : 'Search products...'}
+              value={productSearch}
+              onChangeText={setProductSearch}
+              containerStyle={{ marginBottom: 10 }}
+            />
             <View style={styles.productGrid}>
-              {products.map(product => (
+              {filteredProducts.map(product => (
                 <TouchableOpacity
                   key={product.id}
                   style={styles.productChip}
