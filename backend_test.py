@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
 """
-FPO Management System - Backend API Testing
-Testing authentication endpoints, protected routes, Admin CRUD operations,
-and three NEW features requested for testing:
-1. Notifications System
-2. Shareholder Upgrade System  
-3. Vendor Procurement System
+FPO Manager API Backend Testing - Phase 1 Critical Fixes Focus
+Testing the critical procurement and authentication endpoints as requested
 """
 
 import requests
 import json
 import sys
 from datetime import datetime
+import base64
 
 # Configuration
 BASE_URL = "https://harvest-hub-198.preview.emergentagent.com/api"
