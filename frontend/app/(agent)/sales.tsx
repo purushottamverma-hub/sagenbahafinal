@@ -214,6 +214,7 @@ export default function AgentSalesScreen() {
         outlet_id: user.outlet_id,
         customer_id: selectedCustomer || null,
         customer_name: selectedCustomer ? customer?.name : customerName || null,
+        customer_mobile: customerMobile || null,  // Include mobile number
         items: saleItems,
         subtotal: getSubtotal(),
         discount: parseFloat(discount) || 0,
