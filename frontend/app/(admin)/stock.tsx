@@ -171,9 +171,25 @@ export default function StockScreen() {
     fetchData();
   }, []);
 
-  const filteredStock = selectedOutlet === 'all'
-    ? stock
-    : stock.filter(s => s.outlet_id === selectedOutlet);
+  const filteredStock = React.useMemo(() => {
+    let result = stock;
+    
+    // Filter by outlet
+    if (selectedOutlet !== 'all') {
+      result = result.filter(s => s.outlet_id === selectedOutlet);
+    }
+    
+    // Filter by product search
+    if (productSearch.trim()) {
+      const query = productSearch.toLowerCase();
+      result = result.filter(s => 
+        s.product_name.toLowerCase().includes(query) ||
+        products.find(p => p.id === s.product_id)?.name_hi?.toLowerCase().includes(query)
+      );
+    }
+    
+    return result;
+  }, [stock, selectedOutlet, productSearch, products]);
 
   const handleAddStock = async () => {
     if (!addProduct || !addOutlet || !addQuantity) {
