@@ -107,6 +107,9 @@ export default function StockScreen() {
   // Remark for approval/rejection
   const [adminRemark, setAdminRemark] = useState('');
 
+  // Search state for filtering
+  const [productSearch, setProductSearch] = useState('');
+
   const fetchData = async () => {
     try {
       const [stockRes, consolidatedRes, productsRes, outletsRes, pendingRes] = await Promise.all([
