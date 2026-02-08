@@ -77,6 +77,17 @@ export default function RequestsScreen() {
   const [notes, setNotes] = useState('');
   const [customProduct, setCustomProduct] = useState('');
   const [isCustomProduct, setIsCustomProduct] = useState(false);
+  const [outletSearch, setOutletSearch] = useState('');
+
+  // Filtered outlets based on search
+  const filteredOutlets = React.useMemo(() => {
+    if (!outletSearch.trim()) return outlets;
+    const query = outletSearch.toLowerCase();
+    return outlets.filter(o => 
+      o.name.toLowerCase().includes(query) ||
+      o.address?.toLowerCase().includes(query)
+    );
+  }, [outlets, outletSearch]);
 
   const fetchData = async () => {
     try {
