@@ -236,12 +236,14 @@ export default function RequestsScreen() {
 
   const resetForm = () => {
     setSelectedProduct('');
+    setSelectedOutlet('');
     setQuantity('');
     setRate('');
     setNotes('');
     setCustomProduct('');
     setIsCustomProduct(false);
     setSearchQuery('');
+    setOutletSearch('');
   };
 
   const getStatusColor = (status: string) => {
