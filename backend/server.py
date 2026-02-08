@@ -374,6 +374,8 @@ class FarmerPurchaseBase(BaseModel):
     online_amount: float = 0
     credit_amount: float = 0
     notes: Optional[str] = None
+    outlet_id: Optional[str] = None
+    outlet_name: Optional[str] = None
 
 class FarmerPurchaseCreate(BaseModel):
     farmer_id: str
