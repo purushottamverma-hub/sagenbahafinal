@@ -297,43 +297,68 @@ export default function AgentStockScreen() {
     </Card>
   );
 
-  const renderTransferRequest = ({ item }: { item: TransferRequest }) => (
-    <Card style={styles.requestCard}>
-      <View style={styles.requestHeader}>
-        <View style={styles.requestInfo}>
-          <Text style={styles.requestProduct}>{item.product_name}</Text>
-          <Text style={styles.requestQty}>{item.quantity} units</Text>
+  const renderTransferRequest = ({ item }: { item: TransferRequest }) => {
+    // Determine if this is stock coming IN or going OUT from current user's outlet
+    const isIncoming = item.to_outlet_id === user?.outlet_id;
+    const isOutgoing = item.from_outlet_id === user?.outlet_id;
+    
+    return (
+      <Card style={styles.requestCard}>
+        <View style={styles.requestHeader}>
+          <View style={styles.requestInfo}>
+            <Text style={styles.requestProduct}>{item.product_name}</Text>
+            <Text style={styles.requestQty}>{item.quantity} units</Text>
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            {/* IN/OUT Badge */}
+            {isIncoming && (
+              <View style={[styles.directionBadge, { backgroundColor: '#E8F5E9', marginRight: 8 }]}>
+                <Ionicons name="arrow-down-circle" size={14} color="#4CAF50" />
+                <Text style={{ color: '#4CAF50', fontSize: 12, fontWeight: '600', marginLeft: 4 }}>
+                  {language === 'hi' ? 'IN' : 'IN'}
+                </Text>
+              </View>
+            )}
+            {isOutgoing && (
+              <View style={[styles.directionBadge, { backgroundColor: '#FFF3E0', marginRight: 8 }]}>
+                <Ionicons name="arrow-up-circle" size={14} color="#FF9800" />
+                <Text style={{ color: '#FF9800', fontSize: 12, fontWeight: '600', marginLeft: 4 }}>
+                  {language === 'hi' ? 'OUT' : 'OUT'}
+                </Text>
+              </View>
+            )}
+            <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.status) + '20' }]}>
+              <Text style={[styles.statusText, { color: getStatusColor(item.status) }]}>
+                {getStatusLabel(item.status)}
+              </Text>
+            </View>
+          </View>
         </View>
-        <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.status) + '20' }]}>
-          <Text style={[styles.statusText, { color: getStatusColor(item.status) }]}>
-            {getStatusLabel(item.status)}
-          </Text>
+        
+        <View style={styles.transferFlow}>
+          <View style={[styles.outletBox, isOutgoing && { borderColor: '#FF9800', borderWidth: 1 }]}>
+            <Text style={styles.outletLabel}>{language === 'hi' ? 'से' : 'From'}</Text>
+            <Text style={styles.outletText}>{item.from_outlet_name}</Text>
+          </View>
+          <Ionicons name="arrow-forward" size={20} color="#666" />
+          <View style={[styles.outletBox, isIncoming && { borderColor: '#4CAF50', borderWidth: 1 }]}>
+            <Text style={styles.outletLabel}>{language === 'hi' ? 'को' : 'To'}</Text>
+            <Text style={styles.outletText}>{item.to_outlet_name}</Text>
+          </View>
         </View>
-      </View>
-      
-      <View style={styles.transferFlow}>
-        <View style={styles.outletBox}>
-          <Text style={styles.outletLabel}>{language === 'hi' ? 'से' : 'From'}</Text>
-          <Text style={styles.outletText}>{item.from_outlet_name}</Text>
-        </View>
-        <Ionicons name="arrow-forward" size={20} color="#666" />
-        <View style={styles.outletBox}>
-          <Text style={styles.outletLabel}>{language === 'hi' ? 'को' : 'To'}</Text>
-          <Text style={styles.outletText}>{item.to_outlet_name}</Text>
-        </View>
-      </View>
-      
-      <Text style={styles.requestMeta}>
-        {new Date(item.created_at).toLocaleDateString('en-IN')}
-      </Text>
-      
-      {item.admin_remark && (
-        <Text style={styles.adminRemark}>
-          {language === 'hi' ? 'एडमिन टिप्पणी: ' : 'Admin Remark: '}{item.admin_remark}
+        
+        <Text style={styles.requestMeta}>
+          {new Date(item.created_at).toLocaleDateString('en-IN')}
         </Text>
-      )}
-    </Card>
-  );
+        
+        {item.admin_remark && (
+          <Text style={styles.adminRemark}>
+            {language === 'hi' ? 'एडमिन टिप्पणी: ' : 'Admin Remark: '}{item.admin_remark}
+          </Text>
+        )}
+      </Card>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container}>
