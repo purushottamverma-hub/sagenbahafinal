@@ -246,6 +246,7 @@ class SaleBase(BaseModel):
     outlet_id: str
     customer_id: Optional[str] = None
     customer_name: Optional[str] = None
+    customer_mobile: Optional[str] = None  # Optional mobile number
     items: List[SaleItemBase]
     subtotal: float
     discount: float = 0
@@ -255,6 +256,9 @@ class SaleBase(BaseModel):
     online_amount: float = 0
     credit_amount: float = 0
     notes: Optional[str] = None
+    # Shareholder info for discount application
+    is_shareholder: bool = False
+    shareholder_discount: float = 0
 
 class SaleCreate(SaleBase):
     pass
