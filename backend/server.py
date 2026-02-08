@@ -2285,6 +2285,8 @@ async def mark_all_notifications_read(current_user: dict = Depends(get_current_u
 
 @api_router.post("/shareholder-upgrade/request")
 async def request_shareholder_upgrade(
+    folio_number: Optional[str] = None,
+    share_value: Optional[float] = None,
     certificate_data: Optional[str] = None,
     certificate_filename: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
@@ -2309,6 +2311,8 @@ async def request_shareholder_upgrade(
     upgrade_request = ShareholderUpgradeRequest(
         user_id=current_user["id"],
         user_name=current_user.get("full_name", current_user.get("username")),
+        folio_number=folio_number,
+        share_value=share_value,
         certificate_data=certificate_data,
         certificate_filename=certificate_filename,
         status="pending"
