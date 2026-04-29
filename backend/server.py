@@ -280,6 +280,29 @@ class Sale(SaleBase):
     created_by: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow)
     synced: bool = True
+    # Deletion tracking
+    is_deleted: bool = False
+    deleted_at: Optional[datetime] = None
+    deleted_by: Optional[str] = None
+    deletion_reason: Optional[str] = None
+
+# Transaction Deletion Audit Log
+class TransactionDeletionLog(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    transaction_type: str  # "sale", "vendor_procurement", "farmer_purchase"
+    transaction_id: str
+    original_data: dict  # Store the original transaction data
+    bill_number: Optional[str] = None
+    customer_id: Optional[str] = None
+    customer_name: Optional[str] = None
+    vendor_id: Optional[str] = None
+    vendor_name: Optional[str] = None
+    total_amount: float
+    deleted_by: str  # Admin user who deleted
+    deleted_by_name: str
+    deletion_reason: Optional[str] = None
+    reversal_details: dict  # Details of what was reversed
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class FarmerBase(BaseModel):
     name: str
@@ -1740,10 +1763,15 @@ async def get_sales(
     outlet_id: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    include_deleted: bool = False,
     current_user: dict = Depends(get_current_user)
 ):
     """Get sales with optional filters"""
     query = {}
+    
+    # By default, exclude deleted transactions
+    if not include_deleted:
+        query["$or"] = [{"is_deleted": {"$exists": False}}, {"is_deleted": False}]
     
     if current_user["role"] == "agent" and current_user.get("outlet_id"):
         query["outlet_id"] = current_user["outlet_id"]
@@ -1786,6 +1814,229 @@ async def get_sale(sale_id: str, current_user: dict = Depends(get_current_user))
     sale["outlet_address"] = outlet["address"] if outlet else ""
     
     return sale
+
+# ===================== TRANSACTION DELETION WITH AUTO-REVERSAL =====================
+
+@api_router.delete("/sales/{sale_id}")
+async def delete_sale(
+    sale_id: str, 
+    reason: Optional[str] = None,
+    current_user: dict = Depends(require_admin)
+):
+    """
+    Delete a sales transaction with automatic reversal of:
+    1. Inventory/Stock - Add sold products back to stock
+    2. Customer Ledger - Adjust outstanding dues and totals
+    
+    Constraints:
+    - Only admin can delete
+    - Only transactions within 30 days can be deleted
+    - Creates audit log for tracking
+    """
+    # Find the sale
+    sale = await db.sales.find_one({"id": sale_id})
+    if not sale:
+        raise HTTPException(status_code=404, detail="Sale not found")
+    
+    # Check if already deleted
+    if sale.get("is_deleted", False):
+        raise HTTPException(status_code=400, detail="Transaction already deleted")
+    
+    # Check 30-day constraint
+    sale_date = sale.get("created_at")
+    if isinstance(sale_date, str):
+        sale_date = datetime.fromisoformat(sale_date)
+    
+    days_old = (datetime.utcnow() - sale_date).days
+    if days_old > 30:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Cannot delete transaction older than 30 days. This transaction is {days_old} days old."
+        )
+    
+    reversal_details = {
+        "stock_restored": [],
+        "customer_ledger_adjusted": False,
+        "customer_id": None,
+        "credit_reversed": 0,
+        "paid_amount_reversed": 0
+    }
+    
+    # 1. REVERSE INVENTORY (Add products back to stock)
+    outlet_id = sale.get("outlet_id")
+    items = sale.get("items", [])
+    
+    for item in items:
+        product_id = item.get("product_id")
+        quantity = item.get("quantity", 0)
+        
+        if product_id and quantity > 0:
+            # Find and update stock
+            stock = await db.stock.find_one({
+                "outlet_id": outlet_id,
+                "product_id": product_id
+            })
+            
+            if stock:
+                # Add quantity back to stock
+                await db.stock.update_one(
+                    {"id": stock["id"]},
+                    {
+                        "$inc": {"quantity": quantity, "sold_quantity": -quantity},
+                        "$set": {"updated_at": datetime.utcnow()}
+                    }
+                )
+                reversal_details["stock_restored"].append({
+                    "product_id": product_id,
+                    "product_name": item.get("product_name", "Unknown"),
+                    "quantity_restored": quantity
+                })
+    
+    # 2. ADJUST CUSTOMER LEDGER (if credit was involved)
+    customer_id = sale.get("customer_id")
+    credit_amount = sale.get("credit_amount", 0)
+    total_amount = sale.get("total_amount", 0)
+    cash_amount = sale.get("cash_amount", 0)
+    online_amount = sale.get("online_amount", 0)
+    
+    if customer_id:
+        customer = await db.customers.find_one({"id": customer_id})
+        if customer:
+            # Reverse the ledger entries
+            update_ops = {
+                "$inc": {
+                    "total_purchases": -total_amount,
+                    "transaction_count": -1
+                },
+                "$set": {"updated_at": datetime.utcnow()}
+            }
+            
+            # Reverse credit if any
+            if credit_amount > 0:
+                update_ops["$inc"]["total_credit"] = -credit_amount
+                update_ops["$inc"]["outstanding_balance"] = -credit_amount
+                reversal_details["credit_reversed"] = credit_amount
+            
+            # Reverse paid amount
+            paid_amount = cash_amount + online_amount
+            if paid_amount > 0:
+                update_ops["$inc"]["total_paid"] = -paid_amount
+                reversal_details["paid_amount_reversed"] = paid_amount
+            
+            await db.customers.update_one({"id": customer_id}, update_ops)
+            reversal_details["customer_ledger_adjusted"] = True
+            reversal_details["customer_id"] = customer_id
+    
+    # 3. MARK SALE AS DELETED (soft delete - preserve for audit)
+    await db.sales.update_one(
+        {"id": sale_id},
+        {"$set": {
+            "is_deleted": True,
+            "deleted_at": datetime.utcnow(),
+            "deleted_by": current_user["id"],
+            "deletion_reason": reason
+        }}
+    )
+    
+    # 4. CREATE AUDIT LOG
+    # Get admin name
+    admin = await db.users.find_one({"id": current_user["id"]})
+    admin_name = admin.get("full_name", admin.get("username", "Admin")) if admin else "Admin"
+    
+    # Clean sale data for storage
+    sale.pop('_id', None)
+    
+    audit_log = TransactionDeletionLog(
+        transaction_type="sale",
+        transaction_id=sale_id,
+        original_data=sale,
+        bill_number=sale.get("bill_number"),
+        customer_id=customer_id,
+        customer_name=sale.get("customer_name"),
+        total_amount=total_amount,
+        deleted_by=current_user["id"],
+        deleted_by_name=admin_name,
+        deletion_reason=reason,
+        reversal_details=reversal_details
+    )
+    
+    await db.transaction_deletion_logs.insert_one(audit_log.dict())
+    
+    return {
+        "message": "Transaction deleted successfully",
+        "sale_id": sale_id,
+        "bill_number": sale.get("bill_number"),
+        "reversal_details": reversal_details
+    }
+
+@api_router.get("/deleted-transactions")
+async def get_deleted_transactions(
+    transaction_type: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: dict = Depends(require_admin)
+):
+    """Get audit log of all deleted transactions (Admin only)"""
+    query = {}
+    
+    if transaction_type:
+        query["transaction_type"] = transaction_type
+    
+    if start_date:
+        query["created_at"] = {"$gte": datetime.fromisoformat(start_date)}
+    if end_date:
+        if "created_at" in query:
+            query["created_at"]["$lte"] = datetime.fromisoformat(end_date) + timedelta(days=1)
+        else:
+            query["created_at"] = {"$lte": datetime.fromisoformat(end_date) + timedelta(days=1)}
+    
+    logs = await db.transaction_deletion_logs.find(query).sort("created_at", -1).to_list(500)
+    
+    # Clean MongoDB _id
+    for log in logs:
+        log.pop('_id', None)
+    
+    return logs
+
+@api_router.get("/sales/{sale_id}/can-delete")
+async def check_sale_deletable(sale_id: str, current_user: dict = Depends(get_current_user)):
+    """Check if a sale can be deleted (within 30 days and not already deleted)"""
+    sale = await db.sales.find_one({"id": sale_id})
+    if not sale:
+        raise HTTPException(status_code=404, detail="Sale not found")
+    
+    # Check if already deleted
+    if sale.get("is_deleted", False):
+        return {
+            "can_delete": False,
+            "reason": "Transaction already deleted",
+            "is_admin_required": False
+        }
+    
+    # Check 30-day constraint
+    sale_date = sale.get("created_at")
+    if isinstance(sale_date, str):
+        sale_date = datetime.fromisoformat(sale_date)
+    
+    days_old = (datetime.utcnow() - sale_date).days
+    if days_old > 30:
+        return {
+            "can_delete": False,
+            "reason": f"Transaction is {days_old} days old. Only transactions within 30 days can be deleted.",
+            "is_admin_required": False,
+            "days_old": days_old
+        }
+    
+    # Check if user is admin
+    is_admin = current_user.get("role") == "admin"
+    
+    return {
+        "can_delete": is_admin,
+        "reason": None if is_admin else "Only admin users can delete transactions",
+        "is_admin_required": True,
+        "days_old": days_old,
+        "days_remaining": 30 - days_old
+    }
 
 # ===================== FARMER ROUTES =====================
 

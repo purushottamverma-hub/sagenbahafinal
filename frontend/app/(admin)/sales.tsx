@@ -108,6 +108,17 @@ export default function SalesScreen() {
   const [creatingCustomer, setCreatingCustomer] = useState(false);
   const [confirmedCustomer, setConfirmedCustomer] = useState<Customer | null>(null);
 
+  // Delete transaction state
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [canDeleteInfo, setCanDeleteInfo] = useState<{
+    can_delete: boolean;
+    reason?: string;
+    days_old?: number;
+    days_remaining?: number;
+  } | null>(null);
+
   const fetchData = async () => {
     try {
       const [salesRes, productsRes, outletsRes, customersRes] = await Promise.all([
@@ -434,6 +445,86 @@ export default function SalesScreen() {
       );
     } finally {
       setIsPrinting(false);
+    }
+  };
+
+  // Check if sale can be deleted
+  const checkCanDelete = async (saleId: string) => {
+    try {
+      const response = await api.get(`/sales/${saleId}/can-delete`);
+      setCanDeleteInfo(response.data);
+    } catch (error) {
+      setCanDeleteInfo({ can_delete: false, reason: 'Error checking delete status' });
+    }
+  };
+
+  // Initiate delete process
+  const initiateDelete = async () => {
+    if (!selectedSale) return;
+    await checkCanDelete(selectedSale.id);
+    setDeleteReason('');
+    setShowDeleteConfirm(true);
+  };
+
+  // Execute delete with auto-reversal
+  const handleDeleteTransaction = async () => {
+    if (!selectedSale) return;
+    
+    if (!canDeleteInfo?.can_delete) {
+      Alert.alert(
+        t('error'),
+        canDeleteInfo?.reason || (language === 'hi' ? 'इस लेनदेन को हटाया नहीं जा सकता' : 'Cannot delete this transaction')
+      );
+      return;
+    }
+
+    setIsDeleting(true);
+    try {
+      const response = await api.delete(`/sales/${selectedSale.id}`, {
+        params: { reason: deleteReason || null }
+      });
+      
+      const reversal = response.data.reversal_details;
+      
+      // Build success message with reversal details
+      let message = language === 'hi' 
+        ? `बिल ${selectedSale.bill_number} सफलतापूर्वक हटा दिया गया।\n\n`
+        : `Bill ${selectedSale.bill_number} deleted successfully.\n\n`;
+      
+      if (reversal.stock_restored?.length > 0) {
+        message += language === 'hi' ? 'स्टॉक वापस:\n' : 'Stock Restored:\n';
+        reversal.stock_restored.forEach((item: any) => {
+          message += `• ${item.product_name}: +${item.quantity_restored}\n`;
+        });
+      }
+      
+      if (reversal.customer_ledger_adjusted) {
+        message += language === 'hi' 
+          ? '\nग्राहक खाता समायोजित किया गया।'
+          : '\nCustomer ledger adjusted.';
+        if (reversal.credit_reversed > 0) {
+          message += language === 'hi'
+            ? ` (₹${reversal.credit_reversed} उधार हटाया)`
+            : ` (₹${reversal.credit_reversed} credit reversed)`;
+        }
+      }
+      
+      Alert.alert(
+        language === 'hi' ? 'हटाया गया' : 'Deleted',
+        message
+      );
+      
+      setShowDeleteConfirm(false);
+      setShowBillDetails(false);
+      setSelectedSale(null);
+      fetchData();
+    } catch (error: any) {
+      Alert.alert(
+        t('error'),
+        error.response?.data?.detail || (language === 'hi' ? 'हटाने में त्रुटि' : 'Failed to delete')
+      );
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -935,7 +1026,7 @@ export default function SalesScreen() {
                 </Text>
               </Card>
 
-              {/* Print/Share Actions */}
+              {/* Print/Share/Delete Actions */}
               <View style={styles.billActions}>
                 <TouchableOpacity
                   style={[styles.billActionBtn, styles.printBtn]}
@@ -954,13 +1045,110 @@ export default function SalesScreen() {
                 >
                   <Ionicons name="share-social" size={22} color="#FFF" />
                   <Text style={styles.billActionText}>
-                    {language === 'hi' ? 'PDF शेयर करें' : 'Share PDF'}
+                    {language === 'hi' ? 'शेयर' : 'Share'}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.billActionBtn, styles.deleteBtn]}
+                  onPress={initiateDelete}
+                >
+                  <Ionicons name="trash" size={22} color="#FFF" />
+                  <Text style={styles.billActionText}>
+                    {language === 'hi' ? 'हटाएं' : 'Delete'}
                   </Text>
                 </TouchableOpacity>
               </View>
             </ScrollView>
           )}
         </SafeAreaView>
+      </Modal>
+
+      {/* Delete Confirmation Modal */}
+      <Modal visible={showDeleteConfirm} animationType="slide" transparent>
+        <View style={styles.deleteModalOverlay}>
+          <View style={styles.deleteModalContent}>
+            <View style={styles.deleteModalHeader}>
+              <Ionicons name="warning" size={40} color="#D32F2F" />
+              <Text style={styles.deleteModalTitle}>
+                {language === 'hi' ? 'लेनदेन हटाएं?' : 'Delete Transaction?'}
+              </Text>
+            </View>
+
+            {selectedSale && (
+              <View style={styles.deleteTransactionInfo}>
+                <Text style={styles.deleteTransactionBill}>{selectedSale.bill_number}</Text>
+                <Text style={styles.deleteTransactionAmount}>
+                  {formatCurrency(selectedSale.total_amount)}
+                </Text>
+                {selectedSale.customer_name && (
+                  <Text style={styles.deleteTransactionCustomer}>
+                    {selectedSale.customer_name}
+                  </Text>
+                )}
+              </View>
+            )}
+
+            {canDeleteInfo && !canDeleteInfo.can_delete ? (
+              <View style={styles.deleteWarningBox}>
+                <Ionicons name="close-circle" size={24} color="#D32F2F" />
+                <Text style={styles.deleteWarningText}>{canDeleteInfo.reason}</Text>
+              </View>
+            ) : canDeleteInfo ? (
+              <>
+                <View style={styles.deleteInfoBox}>
+                  <Text style={styles.deleteInfoText}>
+                    {language === 'hi' 
+                      ? `यह लेनदेन ${canDeleteInfo.days_old} दिन पुराना है। हटाने के लिए ${canDeleteInfo.days_remaining} दिन बचे हैं।`
+                      : `This transaction is ${canDeleteInfo.days_old} days old. ${canDeleteInfo.days_remaining} days remaining to delete.`
+                    }
+                  </Text>
+                </View>
+
+                <View style={styles.deleteReversalInfo}>
+                  <Text style={styles.deleteReversalTitle}>
+                    {language === 'hi' ? 'हटाने पर:' : 'On deletion:'}
+                  </Text>
+                  <Text style={styles.deleteReversalItem}>
+                    • {language === 'hi' ? 'स्टॉक वापस किया जाएगा' : 'Stock will be restored'}
+                  </Text>
+                  <Text style={styles.deleteReversalItem}>
+                    • {language === 'hi' ? 'ग्राहक खाता समायोजित होगा' : 'Customer ledger will be adjusted'}
+                  </Text>
+                  <Text style={styles.deleteReversalItem}>
+                    • {language === 'hi' ? 'ऑडिट लॉग में दर्ज होगा' : 'Will be logged for audit'}
+                  </Text>
+                </View>
+
+                <Input
+                  label={language === 'hi' ? 'हटाने का कारण (वैकल्पिक)' : 'Reason for deletion (optional)'}
+                  placeholder={language === 'hi' ? 'कारण दर्ज करें' : 'Enter reason'}
+                  value={deleteReason}
+                  onChangeText={setDeleteReason}
+                  multiline
+                />
+              </>
+            ) : (
+              <Text style={styles.loadingText}>{t('loading')}</Text>
+            )}
+
+            <View style={styles.deleteModalActions}>
+              <Button
+                title={language === 'hi' ? 'रद्द करें' : 'Cancel'}
+                onPress={() => setShowDeleteConfirm(false)}
+                variant="outline"
+                style={styles.cancelDeleteBtn}
+              />
+              {canDeleteInfo?.can_delete && (
+                <Button
+                  title={language === 'hi' ? 'हटाएं' : 'Delete'}
+                  onPress={handleDeleteTransaction}
+                  loading={isDeleting}
+                  style={styles.confirmDeleteBtn}
+                />
+              )}
+            </View>
+          </View>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -1349,10 +1537,119 @@ const styles = StyleSheet.create({
   shareBtn: {
     backgroundColor: '#1976D2',
   },
+  deleteBtn: {
+    backgroundColor: '#D32F2F',
+  },
   billActionText: {
     color: '#FFF',
     fontSize: 15,
     fontWeight: '600',
+  },
+  // Delete Modal Styles
+  deleteModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  deleteModalContent: {
+    backgroundColor: '#FFF',
+    borderRadius: 16,
+    padding: 24,
+    width: '100%',
+    maxWidth: 400,
+  },
+  deleteModalHeader: {
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  deleteModalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#D32F2F',
+    marginTop: 8,
+  },
+  deleteTransactionInfo: {
+    backgroundColor: '#F5F5F5',
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  deleteTransactionBill: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+  },
+  deleteTransactionAmount: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#2E7D32',
+    marginTop: 4,
+  },
+  deleteTransactionCustomer: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 4,
+  },
+  deleteWarningBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFEBEE',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+    gap: 8,
+  },
+  deleteWarningText: {
+    flex: 1,
+    color: '#D32F2F',
+    fontSize: 14,
+  },
+  deleteInfoBox: {
+    backgroundColor: '#FFF3E0',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+  },
+  deleteInfoText: {
+    color: '#E65100',
+    fontSize: 13,
+    textAlign: 'center',
+  },
+  deleteReversalInfo: {
+    backgroundColor: '#E3F2FD',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+  },
+  deleteReversalTitle: {
+    fontWeight: '600',
+    color: '#1565C0',
+    marginBottom: 8,
+  },
+  deleteReversalItem: {
+    color: '#1565C0',
+    fontSize: 13,
+    marginTop: 4,
+  },
+  loadingText: {
+    textAlign: 'center',
+    color: '#666',
+    marginVertical: 16,
+  },
+  deleteModalActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 16,
+  },
+  cancelDeleteBtn: {
+    flex: 1,
+  },
+  confirmDeleteBtn: {
+    flex: 1,
+    backgroundColor: '#D32F2F',
   },
   // Customer Selection Flow Styles
   customerSelectionContainer: {
