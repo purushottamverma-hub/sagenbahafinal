@@ -11,6 +11,8 @@ import {
   TextInput,
   ScrollView,
   Switch,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -535,18 +537,33 @@ export default function PurchaseScreen() {
       />
 
       {/* New Purchase Modal */}
-      <Modal visible={showModal} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <ScrollView ref={modalScrollRef} contentContainerStyle={styles.modalScrollContent}>
-            <View style={styles.modalContent}>
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>
-                  {language === 'hi' ? 'नई खरीद' : 'New Purchase'}
-                </Text>
-                <TouchableOpacity onPress={() => { setShowModal(false); resetForm(); }}>
-                  <Ionicons name="close" size={24} color="#666" />
-                </TouchableOpacity>
-              </View>
+      <Modal visible={showModal} animationType="slide" onRequestClose={() => { setShowModal(false); resetForm(); }}>
+        <SafeAreaView style={styles.modalSafe} edges={['top']}>
+          <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            keyboardVerticalOffset={0}
+          >
+            <ScrollView
+              ref={modalScrollRef}
+              style={{ flex: 1 }}
+              contentContainerStyle={styles.modalScrollContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>
+                    {language === 'hi' ? 'नई खरीद' : 'New Purchase'}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => { setShowModal(false); resetForm(); }}
+                    style={styles.closeBtn}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Ionicons name="close" size={26} color="#666" />
+                  </TouchableOpacity>
+                </View>
 
               {/* Source Type Toggle */}
               <Text style={styles.label}>
@@ -555,7 +572,15 @@ export default function PurchaseScreen() {
               <View style={styles.sourceToggle}>
                 <TouchableOpacity
                   style={[styles.sourceBtn, sourceType === 'farmer' && styles.sourceBtnActive]}
-                  onPress={() => { setSourceType('farmer'); setSelectedSource(''); setSourceSearch(''); }}
+                  onPress={() => {
+                    setSourceType('farmer');
+                    setSelectedSource('');
+                    setSourceSearch('');
+                    setVendorSelectionMode('select');
+                    setConfirmedVendor(null);
+                    setVendorSearch('');
+                    setVendorSearchResults([]);
+                  }}
                 >
                   <Ionicons name="leaf" size={20} color={sourceType === 'farmer' ? '#FFF' : '#2E7D32'} />
                   <Text style={[styles.sourceBtnText, sourceType === 'farmer' && styles.sourceBtnTextActive]}>
@@ -564,7 +589,15 @@ export default function PurchaseScreen() {
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.sourceBtn, styles.vendorBtn, sourceType === 'vendor' && styles.vendorBtnActive]}
-                  onPress={() => { setSourceType('vendor'); setSelectedSource(''); setSourceSearch(''); }}
+                  onPress={() => {
+                    setSourceType('vendor');
+                    setSelectedSource('');
+                    setSourceSearch('');
+                    setVendorSelectionMode('select');
+                    setConfirmedVendor(null);
+                    setVendorSearch('');
+                    setVendorSearchResults([]);
+                  }}
                 >
                   <Ionicons name="storefront" size={20} color={sourceType === 'vendor' ? '#FFF' : '#7B1FA2'} />
                   <Text style={[styles.sourceBtnText, sourceType === 'vendor' && styles.sourceBtnTextActive]}>
@@ -1032,9 +1065,10 @@ export default function PurchaseScreen() {
                 loading={loading}
                 style={styles.submitBtn}
               />
-            </View>
-          </ScrollView>
-        </View>
+              </View>
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </SafeAreaView>
       </Modal>
     </SafeAreaView>
   );
@@ -1064,9 +1098,11 @@ const styles = StyleSheet.create({
   totalAmount: { fontSize: 18, fontWeight: 'bold', color: '#2E7D32' },
   emptyState: { alignItems: 'center', paddingVertical: 60 },
   emptyText: { fontSize: 16, color: '#999', marginTop: 16 },
+  modalSafe: { flex: 1, backgroundColor: '#F5F5F5' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  modalScrollContent: { flexGrow: 1, justifyContent: 'flex-end' },
-  modalContent: { backgroundColor: '#FFF', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '95%' },
+  modalScrollContent: { flexGrow: 1 },
+  modalContent: { backgroundColor: '#FFF', padding: 20, flex: 1 },
+  closeBtn: { padding: 4 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
   modalTitle: { fontSize: 20, fontWeight: 'bold', color: '#333' },
   label: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 8, marginTop: 12 },
