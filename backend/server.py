@@ -304,6 +304,25 @@ class TransactionDeletionLog(BaseModel):
     reversal_details: dict  # Details of what was reversed
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
+# Outlet Cash Deposit (Agent submits cash to Admin)
+class OutletCashDepositCreate(BaseModel):
+    outlet_id: str
+    amount: float
+    payment_mode: str = "cash"  # cash, online, bank_transfer
+    reference_number: Optional[str] = None  # For bank/online transfers
+    notes: Optional[str] = None
+
+class OutletCashDeposit(OutletCashDepositCreate):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    outlet_name: Optional[str] = None
+    deposited_by: str = ""  # Agent user ID
+    deposited_by_name: Optional[str] = None
+    received_by: Optional[str] = None  # Admin who received (for confirmation)
+    received_by_name: Optional[str] = None
+    status: str = "pending"  # pending, confirmed, rejected
+    confirmed_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
 class FarmerBase(BaseModel):
     name: str
     village: str
@@ -923,6 +942,140 @@ async def get_outlets(current_user: dict = Depends(get_current_user)):
         query["id"] = current_user["outlet_id"]
     outlets = await db.outlets.find(query).to_list(1000)
     return [Outlet(**o) for o in outlets]
+
+# IMPORTANT: These specific routes must come BEFORE /outlets/{outlet_id} 
+# to avoid path parameter conflict
+
+@api_router.get("/outlets/ledger")
+async def get_all_outlets_ledger(current_user: dict = Depends(require_admin)):
+    """Get ledger summary for all outlets (Admin only)"""
+    outlets = await db.outlets.find({"is_active": True}).to_list(100)
+    
+    ledger_summary = []
+    for outlet in outlets:
+        outlet_id = outlet["id"]
+        
+        # Get total sales at this outlet (cash + online collected)
+        sales = await db.sales.find({
+            "outlet_id": outlet_id,
+            "$or": [{"is_deleted": {"$exists": False}}, {"is_deleted": False}]
+        }).to_list(10000)
+        
+        total_sales = sum(s.get("total_amount", 0) for s in sales)
+        total_cash_collected = sum(s.get("cash_amount", 0) for s in sales)
+        total_online_collected = sum(s.get("online_amount", 0) for s in sales)
+        total_credit_given = sum(s.get("credit_amount", 0) for s in sales)
+        
+        # Get total deposits made by this outlet
+        deposits = await db.outlet_cash_deposits.find({
+            "outlet_id": outlet_id,
+            "status": "confirmed"
+        }).to_list(10000)
+        
+        total_deposited = sum(d.get("amount", 0) for d in deposits)
+        
+        # Calculate outstanding (cash collected but not deposited)
+        cash_outstanding = total_cash_collected - total_deposited
+        
+        # Get pending deposits
+        pending_deposits = await db.outlet_cash_deposits.find({
+            "outlet_id": outlet_id,
+            "status": "pending"
+        }).to_list(100)
+        
+        pending_deposit_amount = sum(d.get("amount", 0) for d in pending_deposits)
+        
+        ledger_summary.append({
+            "outlet_id": outlet_id,
+            "outlet_name": outlet["name"],
+            "outlet_address": outlet.get("address", ""),
+            "total_sales": total_sales,
+            "total_cash_collected": total_cash_collected,
+            "total_online_collected": total_online_collected,
+            "total_credit_given": total_credit_given,
+            "total_deposited": total_deposited,
+            "cash_outstanding": cash_outstanding,
+            "pending_deposit_amount": pending_deposit_amount,
+            "transaction_count": len(sales)
+        })
+    
+    # Calculate totals
+    totals = {
+        "total_sales": sum(o["total_sales"] for o in ledger_summary),
+        "total_cash_collected": sum(o["total_cash_collected"] for o in ledger_summary),
+        "total_online_collected": sum(o["total_online_collected"] for o in ledger_summary),
+        "total_credit_given": sum(o["total_credit_given"] for o in ledger_summary),
+        "total_deposited": sum(o["total_deposited"] for o in ledger_summary),
+        "cash_outstanding": sum(o["cash_outstanding"] for o in ledger_summary),
+        "pending_deposit_amount": sum(o["pending_deposit_amount"] for o in ledger_summary)
+    }
+    
+    return {
+        "outlets": ledger_summary,
+        "totals": totals
+    }
+
+@api_router.post("/outlets/cash-deposit")
+async def create_cash_deposit(
+    deposit: OutletCashDepositCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    """Record a cash deposit from outlet to admin"""
+    outlet = await db.outlets.find_one({"id": deposit.outlet_id})
+    if not outlet:
+        raise HTTPException(status_code=404, detail="Outlet not found")
+    
+    # Get user name
+    user = await db.users.find_one({"id": current_user["id"]})
+    user_name = user.get("full_name", user.get("username", "Unknown")) if user else "Unknown"
+    
+    deposit_obj = OutletCashDeposit(
+        outlet_id=deposit.outlet_id,
+        outlet_name=outlet["name"],
+        amount=deposit.amount,
+        payment_mode=deposit.payment_mode,
+        reference_number=deposit.reference_number,
+        notes=deposit.notes,
+        deposited_by=current_user["id"],
+        deposited_by_name=user_name,
+        status="pending" if current_user["role"] != "admin" else "confirmed",
+        received_by=current_user["id"] if current_user["role"] == "admin" else None,
+        received_by_name=user_name if current_user["role"] == "admin" else None,
+        confirmed_at=datetime.utcnow() if current_user["role"] == "admin" else None
+    )
+    
+    await db.outlet_cash_deposits.insert_one(deposit_obj.dict())
+    
+    return {
+        "message": "Deposit recorded successfully",
+        "status": deposit_obj.status,
+        "deposit_id": deposit_obj.id
+    }
+
+@api_router.get("/outlets/cash-deposits")
+async def get_cash_deposits(
+    outlet_id: Optional[str] = None,
+    status: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get cash deposit records"""
+    query = {}
+    
+    if current_user["role"] == "agent" and current_user.get("outlet_id"):
+        query["outlet_id"] = current_user["outlet_id"]
+    elif outlet_id:
+        query["outlet_id"] = outlet_id
+    
+    if status:
+        query["status"] = status
+    
+    deposits = await db.outlet_cash_deposits.find(query).sort("created_at", -1).to_list(500)
+    
+    # Clean MongoDB _id
+    for d in deposits:
+        d.pop('_id', None)
+    
+    return deposits
 
 @api_router.get("/outlets/{outlet_id}", response_model=Outlet)
 async def get_outlet(outlet_id: str, current_user: dict = Depends(get_current_user)):
