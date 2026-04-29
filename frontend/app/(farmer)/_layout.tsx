@@ -2,9 +2,12 @@ import React from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSettingsStore } from '../../src/store/settingsStore';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function FarmerLayout() {
   const language = useSettingsStore((state) => state.language);
+  const insets = useSafeAreaInsets();
+  const bottomInset = insets.bottom || 0;
 
   return (
     <Tabs
@@ -16,8 +19,8 @@ export default function FarmerLayout() {
           backgroundColor: '#FFF',
           borderTopWidth: 1,
           borderTopColor: '#E0E0E0',
-          height: 60,
-          paddingBottom: 8,
+          height: 58 + bottomInset,
+          paddingBottom: 8 + bottomInset,
           paddingTop: 8,
         },
         tabBarLabelStyle: {

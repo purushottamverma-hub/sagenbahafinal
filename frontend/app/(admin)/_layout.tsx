@@ -4,10 +4,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from '../../src/utils/useTranslation';
 import { useSettingsStore } from '../../src/store/settingsStore';
 import { Platform, View, Text, StyleSheet } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function AdminLayout() {
   const { t } = useTranslation();
   const language = useSettingsStore((state) => state.language);
+  const insets = useSafeAreaInsets();
+  // Add safe-area bottom inset to avoid conflicting with Android gesture/nav bar
+  const bottomInset = insets.bottom || 0;
 
   return (
     <Tabs
@@ -19,8 +23,8 @@ export default function AdminLayout() {
           backgroundColor: '#FFF',
           borderTopWidth: 1,
           borderTopColor: '#E0E0E0',
-          height: Platform.OS === 'ios' ? 85 : 65,
-          paddingBottom: Platform.OS === 'ios' ? 25 : 10,
+          height: (Platform.OS === 'ios' ? 60 : 58) + bottomInset,
+          paddingBottom: 8 + bottomInset,
           paddingTop: 8,
         },
         tabBarLabelStyle: {

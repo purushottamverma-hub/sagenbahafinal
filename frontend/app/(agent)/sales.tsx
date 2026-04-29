@@ -20,11 +20,18 @@ import { useTranslation } from '../../src/utils/useTranslation';
 import { useAuthStore } from '../../src/store/authStore';
 import api from '../../src/utils/api';
 
+interface ProductVariety {
+  id?: string;
+  name: string;
+  name_hi?: string;
+}
+
 interface Product {
   id: string;
   name: string;
   name_hi?: string;
   unit: string;
+  varieties?: ProductVariety[];
 }
 
 interface Customer {
@@ -43,6 +50,8 @@ interface SaleItem {
   quantity: number;
   rate: number;
   amount: number;
+  variety_id?: string;
+  variety_name?: string;
 }
 
 interface Sale {
@@ -256,45 +265,64 @@ export default function AgentSalesScreen() {
   const getSubtotal = () => saleItems.reduce((sum, item) => sum + item.amount, 0);
   const getTotal = () => Math.max(0, getSubtotal() - (parseFloat(discount) || 0));
 
-  const addItem = (product: Product) => {
-    const existing = saleItems.find(i => i.product_id === product.id);
+  // Product variety selector state
+  const [varietyPickerProduct, setVarietyPickerProduct] = useState<Product | null>(null);
+
+  const addItemToCart = (product: Product, variety?: ProductVariety) => {
+    const baseName = language === 'hi' && product.name_hi ? product.name_hi : product.name;
+    const varietyLabel = variety ? (language === 'hi' && variety.name_hi ? variety.name_hi : variety.name) : '';
+    const displayName = varietyLabel ? `${baseName} - ${varietyLabel}` : baseName;
+    const cartKey = variety?.id ? `${product.id}__${variety.id}` : product.id;
+    const existing = saleItems.find(i => `${i.product_id}${i.variety_id ? '__' + i.variety_id : ''}` === cartKey);
     if (existing) {
       setSaleItems(saleItems.map(i =>
-        i.product_id === product.id
+        `${i.product_id}${i.variety_id ? '__' + i.variety_id : ''}` === cartKey
           ? { ...i, quantity: i.quantity + 1, amount: (i.quantity + 1) * i.rate }
           : i
       ));
     } else {
       setSaleItems([...saleItems, {
         product_id: product.id,
-        product_name: language === 'hi' && product.name_hi ? product.name_hi : product.name,
+        product_name: displayName,
         quantity: 1,
         rate: 0,
         amount: 0,
+        variety_id: variety?.id,
+        variety_name: variety ? (variety.name_hi || variety.name) : undefined,
       }]);
     }
   };
 
-  const updateItemRate = (productId: string, rate: string) => {
+  const addItem = (product: Product) => {
+    if (product.varieties && product.varieties.length > 0) {
+      setVarietyPickerProduct(product);
+      return;
+    }
+    addItemToCart(product);
+  };
+
+  const updateItemRate = (productId: string, rate: string, varietyId?: string) => {
     const rateNum = parseFloat(rate) || 0;
     setSaleItems(saleItems.map(i =>
-      i.product_id === productId
+      (i.product_id === productId && (i.variety_id || '') === (varietyId || ''))
         ? { ...i, rate: rateNum, amount: i.quantity * rateNum }
         : i
     ));
   };
 
-  const updateItemQty = (productId: string, qty: string) => {
+  const updateItemQty = (productId: string, qty: string, varietyId?: string) => {
     const qtyNum = parseFloat(qty) || 0;
     setSaleItems(saleItems.map(i =>
-      i.product_id === productId
+      (i.product_id === productId && (i.variety_id || '') === (varietyId || ''))
         ? { ...i, quantity: qtyNum, amount: qtyNum * i.rate }
         : i
     ));
   };
 
-  const removeItem = (productId: string) => {
-    setSaleItems(saleItems.filter(i => i.product_id !== productId));
+  const removeItem = (productId: string, varietyId?: string) => {
+    setSaleItems(saleItems.filter(i =>
+      !(i.product_id === productId && (i.variety_id || '') === (varietyId || ''))
+    ));
   };
 
   const resetSaleForm = () => {
@@ -713,6 +741,12 @@ export default function AgentSalesScreen() {
                         {language === 'hi' && product.name_hi ? product.name_hi : product.name}
                       </Text>
                       <Text style={styles.productUnit}>({product.unit})</Text>
+                      {product.varieties && product.varieties.length > 0 && (
+                        <View style={styles.varietyBadge}>
+                          <Ionicons name="layers-outline" size={10} color="#FFF" />
+                          <Text style={styles.varietyBadgeText}>{product.varieties.length}</Text>
+                        </View>
+                      )}
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -722,10 +756,10 @@ export default function AgentSalesScreen() {
                   <View style={styles.itemsSection} onLayout={(e) => { itemsSectionY.current = productsSectionY.current + e.nativeEvent.layout.y; }}>
                     <Text style={styles.label}>{language === 'hi' ? 'आइटम्स' : 'Items'}</Text>
                     {saleItems.map(item => (
-                      <View key={item.product_id} style={styles.itemRow}>
+                      <View key={`${item.product_id}${item.variety_id ? '__' + item.variety_id : ''}`} style={styles.itemRow}>
                         <View style={styles.itemInfo}>
                           <Text style={styles.itemName}>{item.product_name}</Text>
-                          <TouchableOpacity onPress={() => removeItem(item.product_id)}>
+                          <TouchableOpacity onPress={() => removeItem(item.product_id, item.variety_id)}>
                             <Ionicons name="trash-outline" size={18} color="#D32F2F" />
                           </TouchableOpacity>
                         </View>
@@ -733,7 +767,7 @@ export default function AgentSalesScreen() {
                           <Input
                             placeholder={t('quantity')}
                             value={item.quantity.toString()}
-                            onChangeText={(val) => updateItemQty(item.product_id, val)}
+                            onChangeText={(val) => updateItemQty(item.product_id, val, item.variety_id)}
                             keyboardType="decimal-pad"
                             containerStyle={styles.qtyInput}
                           />
@@ -741,7 +775,7 @@ export default function AgentSalesScreen() {
                           <Input
                             placeholder={t('rate')}
                             value={item.rate > 0 ? item.rate.toString() : ''}
-                            onChangeText={(val) => updateItemRate(item.product_id, val)}
+                            onChangeText={(val) => updateItemRate(item.product_id, val, item.variety_id)}
                             keyboardType="decimal-pad"
                             containerStyle={styles.rateInput}
                           />
@@ -832,6 +866,45 @@ export default function AgentSalesScreen() {
             )}
           </ScrollView>
         </SafeAreaView>
+      </Modal>
+
+      {/* Product Variety Picker Modal */}
+      <Modal visible={!!varietyPickerProduct} animationType="fade" transparent onRequestClose={() => setVarietyPickerProduct(null)}>
+        <View style={styles.varietyModalOverlay}>
+          <View style={styles.varietyModalCard}>
+            <View style={styles.varietyModalHeader}>
+              <Text style={styles.varietyModalTitle}>
+                {language === 'hi' ? 'किस्म चुनें' : 'Select Variety'}
+              </Text>
+              <TouchableOpacity onPress={() => setVarietyPickerProduct(null)}>
+                <Ionicons name="close" size={24} color="#666" />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.varietyModalSubtitle}>
+              {varietyPickerProduct ? (language === 'hi' && varietyPickerProduct.name_hi ? varietyPickerProduct.name_hi : varietyPickerProduct.name) : ''}
+            </Text>
+            <ScrollView style={{ maxHeight: 360 }}>
+              {varietyPickerProduct?.varieties?.map((v, idx) => (
+                <TouchableOpacity
+                  key={v.id || idx}
+                  style={styles.varietyOption}
+                  onPress={() => {
+                    if (varietyPickerProduct) {
+                      addItemToCart(varietyPickerProduct, v);
+                      setVarietyPickerProduct(null);
+                    }
+                  }}
+                >
+                  <Ionicons name="leaf-outline" size={22} color="#2E7D32" />
+                  <Text style={styles.varietyOptionText}>
+                    {language === 'hi' && v.name_hi ? v.name_hi : v.name}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={20} color="#999" />
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -1347,4 +1420,50 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: 2,
   },
+  // Variety picker modal
+  varietyBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    backgroundColor: '#1976D2',
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+    gap: 2,
+  },
+  varietyBadgeText: { fontSize: 10, color: '#FFF', fontWeight: '700' },
+  varietyModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  varietyModalCard: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: '#FFF',
+    borderRadius: 12,
+    padding: 16,
+  },
+  varietyModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  varietyModalTitle: { fontSize: 17, fontWeight: '700', color: '#333' },
+  varietyModalSubtitle: { fontSize: 13, color: '#666', marginBottom: 12 },
+  varietyOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    marginBottom: 8,
+    gap: 12,
+    backgroundColor: '#FAFAFA',
+  },
+  varietyOptionText: { flex: 1, fontSize: 15, fontWeight: '600', color: '#333' },
 });

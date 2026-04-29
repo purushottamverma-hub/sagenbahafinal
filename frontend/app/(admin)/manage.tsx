@@ -30,6 +30,12 @@ interface Outlet {
   is_active: boolean;
 }
 
+interface ProductVariety {
+  id?: string;
+  name: string;
+  name_hi?: string;
+}
+
 interface Product {
   id: string;
   name: string;
@@ -37,6 +43,7 @@ interface Product {
   unit: string;
   category: string;
   description?: string;
+  varieties?: ProductVariety[];
 }
 
 interface Vendor {
@@ -92,6 +99,9 @@ export default function ManageScreen() {
   const [productUnit, setProductUnit] = useState('kg');
   const [productCategory, setProductCategory] = useState('produce');
   const [productDescription, setProductDescription] = useState('');
+  const [productVarieties, setProductVarieties] = useState<ProductVariety[]>([]);
+  const [newVarietyName, setNewVarietyName] = useState('');
+  const [newVarietyNameHi, setNewVarietyNameHi] = useState('');
 
   // Form states for vendors
   const [vendorName, setVendorName] = useState('');
@@ -157,6 +167,9 @@ export default function ManageScreen() {
     setProductUnit('kg');
     setProductCategory('produce');
     setProductDescription('');
+    setProductVarieties([]);
+    setNewVarietyName('');
+    setNewVarietyNameHi('');
     setVendorName('');
     setVendorMobile('');
     setVendorAddress('');
@@ -210,6 +223,7 @@ export default function ManageScreen() {
               unit: productUnit,
               category: productCategory,
               description: productDescription,
+              varieties: productVarieties,
             });
           } else {
             await api.post('/products', {
@@ -218,6 +232,7 @@ export default function ManageScreen() {
               unit: productUnit,
               category: productCategory,
               description: productDescription,
+              varieties: productVarieties,
             });
           }
           break;
@@ -322,6 +337,7 @@ export default function ManageScreen() {
       setProductUnit(item.unit || 'kg');
       setProductCategory(item.category || 'produce');
       setProductDescription(item.description || '');
+      setProductVarieties(item.varieties || []);
     } else if (activeTab === 'vendors') {
       setVendorName(item.name || '');
       setVendorMobile(item.mobile || '');
@@ -374,6 +390,11 @@ export default function ManageScreen() {
         <View style={styles.itemInfo}>
           <Text style={styles.itemName}>{language === 'hi' && item.name_hi ? item.name_hi : item.name}</Text>
           <Text style={styles.itemMeta}>{item.unit} • {item.category}</Text>
+          {item.varieties && item.varieties.length > 0 && (
+            <Text style={styles.varietyCountText}>
+              {item.varieties.length} {language === 'hi' ? 'किस्में' : (item.varieties.length === 1 ? 'variety' : 'varieties')}
+            </Text>
+          )}
         </View>
         <View style={styles.itemActions}>
           <TouchableOpacity onPress={() => handleEdit(item)} style={styles.actionBtn}>
@@ -539,6 +560,66 @@ export default function ManageScreen() {
                   <Text style={[styles.unitText, productCategory === cat.id && styles.unitTextActive]}>{cat.label}</Text>
                 </TouchableOpacity>
               ))}
+            </View>
+
+            {/* Varieties Section */}
+            <Text style={styles.label}>
+              {language === 'hi' ? 'किस्में (वैकल्पिक)' : 'Varieties (Optional)'}
+            </Text>
+            <Text style={styles.helperText}>
+              {language === 'hi'
+                ? 'जैसे: बासमती, सोना मसूरी। बिक्री के समय उपयोगकर्ता से किस्म चुनने को कहा जाएगा।'
+                : 'e.g., Basmati, Sona Masoori. User will be asked to pick a variety during sale/purchase.'}
+            </Text>
+
+            {productVarieties.length > 0 && (
+              <View style={styles.varietiesList}>
+                {productVarieties.map((v, idx) => (
+                  <View key={v.id || idx} style={styles.varietyChip}>
+                    <Text style={styles.varietyChipText}>
+                      {language === 'hi' && v.name_hi ? v.name_hi : v.name}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => setProductVarieties(productVarieties.filter((_, i) => i !== idx))}
+                      style={styles.varietyChipRemove}
+                    >
+                      <Ionicons name="close-circle" size={18} color="#D32F2F" />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            <View style={styles.varietyAddRow}>
+              <TextInput
+                style={[styles.input, styles.varietyInput]}
+                value={newVarietyName}
+                onChangeText={setNewVarietyName}
+                placeholder={language === 'hi' ? 'किस्म नाम (English)' : 'Variety name (English)'}
+                placeholderTextColor="#999"
+              />
+              <TextInput
+                style={[styles.input, styles.varietyInput]}
+                value={newVarietyNameHi}
+                onChangeText={setNewVarietyNameHi}
+                placeholder={language === 'hi' ? 'हिंदी नाम' : 'Hindi name'}
+                placeholderTextColor="#999"
+              />
+              <TouchableOpacity
+                style={styles.varietyAddBtn}
+                onPress={() => {
+                  const name = newVarietyName.trim();
+                  if (!name) return;
+                  setProductVarieties([
+                    ...productVarieties,
+                    { name, name_hi: newVarietyNameHi.trim() || undefined },
+                  ]);
+                  setNewVarietyName('');
+                  setNewVarietyNameHi('');
+                }}
+              >
+                <Ionicons name="add-circle" size={32} color="#2E7D32" />
+              </TouchableOpacity>
             </View>
           </>
         );
@@ -711,4 +792,14 @@ const styles = StyleSheet.create({
   checkboxRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 16 },
   checkboxLabel: { fontSize: 15, color: '#333' },
   submitBtn: { marginTop: 24 },
+  // Varieties
+  helperText: { fontSize: 12, color: '#666', marginBottom: 8, marginTop: -4, fontStyle: 'italic' },
+  varietiesList: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
+  varietyChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#E8F5E9', borderWidth: 1, borderColor: '#2E7D32', borderRadius: 16, paddingVertical: 6, paddingHorizontal: 10, gap: 6 },
+  varietyChipText: { fontSize: 13, color: '#2E7D32', fontWeight: '600' },
+  varietyChipRemove: { marginLeft: 2 },
+  varietyAddRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  varietyInput: { flex: 1, marginBottom: 0 },
+  varietyAddBtn: { padding: 4 },
+  varietyCountText: { fontSize: 12, color: '#1976D2', fontWeight: '600', marginTop: 2 },
 });

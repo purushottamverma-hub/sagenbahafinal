@@ -138,6 +138,11 @@ class Outlet(OutletBase):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
+class ProductVariety(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    name_hi: Optional[str] = None
+
 class ProductBase(BaseModel):
     name: str
     name_hi: Optional[str] = None  # Hindi name
@@ -145,6 +150,7 @@ class ProductBase(BaseModel):
     category: str = "input"  # input (seeds, bio-inputs) or output (produce)
     description: Optional[str] = None
     is_active: bool = True
+    varieties: List[ProductVariety] = []  # Optional product varieties (e.g., Basmati, Sona Masoori)
 
 class ProductCreate(ProductBase):
     pass
@@ -252,6 +258,8 @@ class SaleItemBase(BaseModel):
     quantity: float
     rate: float
     amount: float
+    variety_id: Optional[str] = None  # Optional product variety
+    variety_name: Optional[str] = None
 
 class SaleBase(BaseModel):
     outlet_id: str
@@ -396,6 +404,9 @@ class VendorProcurementBase(BaseModel):
     manual_vendor_mobile: Optional[str] = None
     manual_product_name: Optional[str] = None
     manual_product_unit: Optional[str] = None
+    # Product variety (optional)
+    variety_id: Optional[str] = None
+    variety_name: Optional[str] = None
 
 class VendorProcurement(VendorProcurementBase):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -1724,26 +1735,34 @@ async def get_customer_ledger(
     
     sales = [clean_doc(s) for s in sales_raw]
     payments = [clean_doc(p) for p in payments_raw]
-    
-    # Calculate ledger summary
-    total_billed = sum(s.get("total_amount", 0) for s in sales)
-    total_credit_given = sum(s.get("credit_amount", 0) for s in sales)
+
+    # Split active vs cancelled sales — only active sales count in totals
+    active_sales = [s for s in sales if not s.get("is_deleted", False)]
+    cancelled_sales = [s for s in sales if s.get("is_deleted", False)]
+
+    # Calculate ledger summary (cancelled sales are excluded from totals)
+    total_billed = sum(s.get("total_amount", 0) for s in active_sales)
+    total_credit_given = sum(s.get("credit_amount", 0) for s in active_sales)
     total_payments = sum(p.get("amount", 0) for p in payments)
-    
+
     # Build transaction timeline (combined sales and payments sorted by date)
     transactions = []
     for s in sales:
+        is_cancelled = s.get("is_deleted", False)
         transactions.append({
             "id": s["id"],
             "type": "sale",
             "date": s["created_at"],
             "reference": s.get("bill_number", ""),
-            "description": f"Bill #{s.get('bill_number', 'N/A')}",
-            "debit": s.get("credit_amount", 0),  # Credit amount adds to dues
+            "description": f"Bill #{s.get('bill_number', 'N/A')}" + (" (CANCELLED)" if is_cancelled else ""),
+            "debit": 0 if is_cancelled else s.get("credit_amount", 0),
             "credit": 0,
             "items_count": len(s.get("items", [])),
             "total_amount": s.get("total_amount", 0),
-            "payment_mode": s.get("payment_mode", "")
+            "payment_mode": s.get("payment_mode", ""),
+            "is_cancelled": is_cancelled,
+            "deleted_at": s.get("deleted_at"),
+            "deletion_reason": s.get("deletion_reason", ""),
         })
     
     for p in payments:
@@ -1967,11 +1986,12 @@ async def get_sale(sale_id: str, current_user: dict = Depends(get_current_user))
     sale = await db.sales.find_one({"id": sale_id})
     if not sale:
         raise HTTPException(status_code=404, detail="Sale not found")
-    
+
+    sale.pop('_id', None)
     outlet = await db.outlets.find_one({"id": sale["outlet_id"]})
     sale["outlet_name"] = outlet["name"] if outlet else "Unknown"
     sale["outlet_address"] = outlet["address"] if outlet else ""
-    
+
     return sale
 
 # ===================== TRANSACTION DELETION WITH AUTO-REVERSAL =====================
@@ -2656,27 +2676,34 @@ async def get_vendor_ledger(
     
     purchases = [clean_doc(p) for p in purchases_raw]
     payments = [clean_doc(p) for p in payments_raw]
-    
+
+    # Split active vs cancelled — cancelled are shown but excluded from totals
+    active_purchases = [p for p in purchases if not p.get("is_deleted", False)]
+
     # Calculate ledger summary
-    total_purchases = sum(p.get("total_amount", 0) for p in purchases)
-    total_credit_given = sum(p.get("credit_amount", 0) for p in purchases)
+    total_purchases = sum(p.get("total_amount", 0) for p in active_purchases)
+    total_credit_given = sum(p.get("credit_amount", 0) for p in active_purchases)
     total_payments = sum(p.get("amount", 0) for p in payments)
-    
+
     # Build transaction timeline (combined purchases and payments sorted by date)
     transactions = []
     for p in purchases:
+        is_cancelled = p.get("is_deleted", False)
         transactions.append({
             "id": p["id"],
             "type": "purchase",
             "date": p["created_at"],
             "reference": p.get("receipt_number", ""),
-            "description": f"Purchase - {p.get('product_name', 'N/A')}",
-            "debit": p.get("credit_amount", 0),  # Credit amount adds to dues
+            "description": f"Purchase - {p.get('product_name', 'N/A')}" + (" (CANCELLED)" if is_cancelled else ""),
+            "debit": 0 if is_cancelled else p.get("credit_amount", 0),
             "credit": 0,
             "quantity": p.get("quantity", 0),
             "rate": p.get("rate", 0),
             "total_amount": p.get("total_amount", 0),
-            "payment_mode": p.get("payment_mode", "")
+            "payment_mode": p.get("payment_mode", ""),
+            "is_cancelled": is_cancelled,
+            "deleted_at": p.get("deleted_at"),
+            "deletion_reason": p.get("deletion_reason", ""),
         })
     
     for p in payments:

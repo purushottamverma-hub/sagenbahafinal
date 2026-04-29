@@ -3,9 +3,12 @@ import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from '../../src/utils/useTranslation';
 import { Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function AgentLayout() {
   const { t } = useTranslation();
+  const insets = useSafeAreaInsets();
+  const bottomInset = insets.bottom || 0;
 
   return (
     <Tabs
@@ -17,8 +20,8 @@ export default function AgentLayout() {
           backgroundColor: '#FFF',
           borderTopWidth: 1,
           borderTopColor: '#E0E0E0',
-          height: Platform.OS === 'ios' ? 85 : 65,
-          paddingBottom: Platform.OS === 'ios' ? 25 : 10,
+          height: (Platform.OS === 'ios' ? 60 : 58) + bottomInset,
+          paddingBottom: 8 + bottomInset,
           paddingTop: 8,
         },
         tabBarLabelStyle: {

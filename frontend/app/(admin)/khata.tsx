@@ -45,6 +45,10 @@ interface Transaction {
   debit: number;
   credit: number;
   payment_mode?: string;
+  is_cancelled?: boolean;
+  deleted_at?: string;
+  deletion_reason?: string;
+  total_amount?: number;
 }
 
 interface LedgerData {
@@ -93,6 +97,28 @@ export default function KhataScreen() {
     folio_number: '',
   });
   const [submittingCustomer, setSubmittingCustomer] = useState(false);
+
+  // Invoice detail modal
+  const [invoiceSale, setInvoiceSale] = useState<any | null>(null);
+  const [invoiceLoading, setInvoiceLoading] = useState(false);
+
+  const openInvoice = async (saleId: string) => {
+    try {
+      setInvoiceLoading(true);
+      setInvoiceSale({ id: saleId });
+      const response = await api.get(`/sales/${saleId}`);
+      setInvoiceSale(response.data);
+    } catch (error) {
+      console.error('Load invoice error:', error);
+      Alert.alert(
+        language === 'hi' ? 'त्रुटि' : 'Error',
+        language === 'hi' ? 'बिल लोड नहीं हो सका' : 'Failed to load invoice'
+      );
+      setInvoiceSale(null);
+    } finally {
+      setInvoiceLoading(false);
+    }
+  };
 
   const fetchCustomers = async () => {
     try {
@@ -306,29 +332,63 @@ export default function KhataScreen() {
     </Card>
   );
 
-  const renderTransactionItem = ({ item }: { item: Transaction }) => (
-    <View style={styles.transactionRow}>
-      <View style={styles.transactionIcon}>
-        <Ionicons
-          name={item.type === 'sale' ? 'cart' : 'cash'}
-          size={20}
-          color={item.type === 'sale' ? '#E65100' : '#2E7D32'}
-        />
-      </View>
-      <View style={styles.transactionInfo}>
-        <Text style={styles.transactionDesc}>{item.description}</Text>
-        <Text style={styles.transactionDate}>{formatDate(item.date)}</Text>
-      </View>
-      <View style={styles.transactionAmount}>
-        {item.debit > 0 && (
-          <Text style={styles.debitAmount}>+{formatCurrency(item.debit)}</Text>
-        )}
-        {item.credit > 0 && (
-          <Text style={styles.creditAmount}>-{formatCurrency(item.credit)}</Text>
-        )}
-      </View>
-    </View>
-  );
+  const renderTransactionItem = ({ item }: { item: Transaction }) => {
+    const isCancelled = !!item.is_cancelled;
+    const isSale = item.type === 'sale';
+    return (
+      <TouchableOpacity
+        style={[styles.transactionRow, isCancelled && styles.transactionRowCancelled]}
+        onPress={() => isSale && openInvoice(item.id)}
+        activeOpacity={isSale ? 0.6 : 1}
+        disabled={!isSale}
+      >
+        <View style={[styles.transactionIcon, isCancelled && { backgroundColor: '#FFEBEE' }]}>
+          <Ionicons
+            name={isSale ? 'cart' : 'cash'}
+            size={20}
+            color={isCancelled ? '#D32F2F' : (isSale ? '#E65100' : '#2E7D32')}
+          />
+        </View>
+        <View style={styles.transactionInfo}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <Text style={[styles.transactionDesc, isCancelled && styles.cancelledText]}>
+              {item.description.replace(' (CANCELLED)', '')}
+            </Text>
+            {isCancelled && (
+              <View style={styles.cancelledBadge}>
+                <Text style={styles.cancelledBadgeText}>
+                  {language === 'hi' ? 'रद्द' : 'CANCELLED'}
+                </Text>
+              </View>
+            )}
+          </View>
+          <Text style={styles.transactionDate}>{formatDate(item.date)}</Text>
+          {isCancelled && item.deletion_reason ? (
+            <Text style={styles.cancelledReason} numberOfLines={1}>
+              {language === 'hi' ? 'कारण: ' : 'Reason: '}{item.deletion_reason}
+            </Text>
+          ) : null}
+        </View>
+        <View style={styles.transactionAmount}>
+          {isCancelled && item.total_amount ? (
+            <Text style={[styles.debitAmount, styles.strikethrough]}>{formatCurrency(item.total_amount)}</Text>
+          ) : (
+            <>
+              {item.debit > 0 && (
+                <Text style={styles.debitAmount}>+{formatCurrency(item.debit)}</Text>
+              )}
+              {item.credit > 0 && (
+                <Text style={styles.creditAmount}>-{formatCurrency(item.credit)}</Text>
+              )}
+            </>
+          )}
+          {isSale && !isCancelled && (
+            <Ionicons name="chevron-forward" size={16} color="#999" style={{ marginTop: 2 }} />
+          )}
+        </View>
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -651,6 +711,114 @@ export default function KhataScreen() {
               style={styles.submitBtn}
             />
           </ScrollView>
+        </SafeAreaView>
+      </Modal>
+
+      {/* Invoice Detail Modal */}
+      <Modal visible={!!invoiceSale} animationType="slide" onRequestClose={() => setInvoiceSale(null)}>
+        <SafeAreaView style={styles.invoiceContainer}>
+          <View style={styles.invoiceHeader}>
+            <TouchableOpacity onPress={() => setInvoiceSale(null)}>
+              <Ionicons name="close" size={26} color="#333" />
+            </TouchableOpacity>
+            <Text style={styles.invoiceTitle}>
+              {language === 'hi' ? 'बिल विवरण' : 'Invoice Detail'}
+            </Text>
+            <View style={{ width: 26 }} />
+          </View>
+          {invoiceLoading || !invoiceSale?.items ? (
+            <View style={{ padding: 40, alignItems: 'center' }}>
+              <Text style={{ color: '#666' }}>{language === 'hi' ? 'लोड हो रहा है...' : 'Loading...'}</Text>
+            </View>
+          ) : (
+            <ScrollView contentContainerStyle={styles.invoiceContent}>
+              {invoiceSale.is_deleted && (
+                <View style={styles.cancelledWatermark}>
+                  <Ionicons name="close-circle" size={28} color="#D32F2F" />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.cancelledWatermarkText}>
+                      {language === 'hi' ? 'यह बिल रद्द कर दिया गया है' : 'THIS INVOICE HAS BEEN CANCELLED'}
+                    </Text>
+                    {invoiceSale.deletion_reason ? (
+                      <Text style={styles.cancelledWatermarkSub}>
+                        {language === 'hi' ? 'कारण: ' : 'Reason: '}{invoiceSale.deletion_reason}
+                      </Text>
+                    ) : null}
+                    {invoiceSale.deleted_at ? (
+                      <Text style={styles.cancelledWatermarkSub}>
+                        {language === 'hi' ? 'रद्द किया गया: ' : 'Cancelled on: '}{formatDate(invoiceSale.deleted_at)}
+                      </Text>
+                    ) : null}
+                  </View>
+                </View>
+              )}
+
+              <View style={styles.invoiceCard}>
+                <Text style={styles.billNumber}>#{invoiceSale.bill_number}</Text>
+                <Text style={styles.billDate}>{formatDate(invoiceSale.created_at)}</Text>
+                {invoiceSale.customer_name ? (
+                  <Text style={styles.billCustomer}>
+                    <Ionicons name="person-outline" size={14} color="#666" /> {invoiceSale.customer_name}
+                  </Text>
+                ) : null}
+                {invoiceSale.outlet_name ? (
+                  <Text style={styles.billOutlet}>
+                    <Ionicons name="business-outline" size={14} color="#666" /> {invoiceSale.outlet_name}
+                  </Text>
+                ) : null}
+              </View>
+
+              <View style={styles.invoiceItemsHeader}>
+                <Text style={[styles.invoiceColHead, { flex: 3 }]}>
+                  {language === 'hi' ? 'आइटम' : 'Item'}
+                </Text>
+                <Text style={[styles.invoiceColHead, { flex: 1, textAlign: 'right' }]}>
+                  {language === 'hi' ? 'मात्रा' : 'Qty'}
+                </Text>
+                <Text style={[styles.invoiceColHead, { flex: 1, textAlign: 'right' }]}>
+                  {language === 'hi' ? 'दर' : 'Rate'}
+                </Text>
+                <Text style={[styles.invoiceColHead, { flex: 1.2, textAlign: 'right' }]}>
+                  {language === 'hi' ? 'राशि' : 'Amount'}
+                </Text>
+              </View>
+              {(invoiceSale.items || []).map((it: any, idx: number) => (
+                <View key={idx} style={styles.invoiceItemRow}>
+                  <Text style={[styles.invoiceCol, { flex: 3 }]}>{it.product_name}</Text>
+                  <Text style={[styles.invoiceCol, { flex: 1, textAlign: 'right' }]}>{it.quantity}</Text>
+                  <Text style={[styles.invoiceCol, { flex: 1, textAlign: 'right' }]}>{formatCurrency(it.rate)}</Text>
+                  <Text style={[styles.invoiceCol, { flex: 1.2, textAlign: 'right', fontWeight: '600' }]}>{formatCurrency(it.amount)}</Text>
+                </View>
+              ))}
+
+              <View style={styles.invoiceSummary}>
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>{language === 'hi' ? 'उप-योग' : 'Subtotal'}</Text>
+                  <Text style={styles.summaryValue}>{formatCurrency(invoiceSale.subtotal || 0)}</Text>
+                </View>
+                {!!invoiceSale.discount && invoiceSale.discount > 0 && (
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>{language === 'hi' ? 'छूट' : 'Discount'}</Text>
+                    <Text style={styles.summaryValue}>-{formatCurrency(invoiceSale.discount)}</Text>
+                  </View>
+                )}
+                <View style={[styles.summaryRow, { borderTopWidth: 1, borderTopColor: '#E0E0E0', paddingTop: 8, marginTop: 6 }]}>
+                  <Text style={[styles.summaryLabel, { fontWeight: '700', fontSize: 16 }]}>{language === 'hi' ? 'कुल' : 'Total'}</Text>
+                  <Text style={[styles.summaryValue, { fontWeight: '700', fontSize: 16, color: '#2E7D32' }]}>{formatCurrency(invoiceSale.total_amount || 0)}</Text>
+                </View>
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>{language === 'hi' ? 'भुगतान' : 'Payment Mode'}</Text>
+                  <Text style={styles.summaryValue}>{(invoiceSale.payment_mode || '').toUpperCase()}</Text>
+                </View>
+                {!!invoiceSale.credit_amount && invoiceSale.credit_amount > 0 && (
+                  <View style={styles.summaryRow}>
+                    <Text style={[styles.summaryLabel, { color: '#D32F2F' }]}>{language === 'hi' ? 'उधार' : 'Credit'}</Text>
+                    <Text style={[styles.summaryValue, { color: '#D32F2F' }]}>{formatCurrency(invoiceSale.credit_amount)}</Text>
+                  </View>
+                )}
+              </View>
+            </ScrollView>
+          )}
         </SafeAreaView>
       </Modal>
     </SafeAreaView>
@@ -1060,4 +1228,109 @@ const styles = StyleSheet.create({
     marginTop: 24,
     marginBottom: 40,
   },
+  // Cancelled transaction styles
+  transactionRowCancelled: {
+    opacity: 0.72,
+    backgroundColor: '#FFF5F5',
+  },
+  cancelledText: {
+    textDecorationLine: 'line-through',
+    color: '#999',
+  },
+  strikethrough: {
+    textDecorationLine: 'line-through',
+    color: '#999',
+    fontWeight: '500',
+  },
+  cancelledBadge: {
+    backgroundColor: '#D32F2F',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  cancelledBadgeText: {
+    color: '#FFF',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+  },
+  cancelledReason: {
+    fontSize: 11,
+    color: '#D32F2F',
+    marginTop: 2,
+    fontStyle: 'italic',
+  },
+  // Invoice Detail Modal
+  invoiceContainer: { flex: 1, backgroundColor: '#F5F5F5' },
+  invoiceHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFF',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  invoiceTitle: { fontSize: 17, fontWeight: '700', color: '#333' },
+  invoiceContent: { padding: 16, paddingBottom: 40 },
+  cancelledWatermark: {
+    flexDirection: 'row',
+    backgroundColor: '#FFEBEE',
+    borderLeftWidth: 4,
+    borderLeftColor: '#D32F2F',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 14,
+    gap: 10,
+    alignItems: 'center',
+  },
+  cancelledWatermarkText: { color: '#D32F2F', fontWeight: '700', fontSize: 14 },
+  cancelledWatermarkSub: { color: '#666', fontSize: 11, marginTop: 2 },
+  invoiceCard: {
+    backgroundColor: '#FFF',
+    padding: 14,
+    borderRadius: 10,
+    marginBottom: 14,
+  },
+  billNumber: { fontSize: 20, fontWeight: '700', color: '#2E7D32' },
+  billDate: { fontSize: 12, color: '#666', marginTop: 2, marginBottom: 8 },
+  billCustomer: { fontSize: 14, color: '#333', marginTop: 4 },
+  billOutlet: { fontSize: 13, color: '#666', marginTop: 4 },
+  invoiceItemsHeader: {
+    flexDirection: 'row',
+    backgroundColor: '#FFF',
+    borderTopLeftRadius: 10,
+    borderTopRightRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    gap: 6,
+  },
+  invoiceColHead: { fontSize: 12, fontWeight: '700', color: '#666' },
+  invoiceItemRow: {
+    flexDirection: 'row',
+    backgroundColor: '#FFF',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+    gap: 6,
+  },
+  invoiceCol: { fontSize: 13, color: '#333' },
+  invoiceSummary: {
+    backgroundColor: '#FFF',
+    padding: 14,
+    borderBottomLeftRadius: 10,
+    borderBottomRightRadius: 10,
+    marginTop: 0,
+  },
+  summaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+  },
+  summaryLabel: { fontSize: 14, color: '#666' },
+  summaryValue: { fontSize: 14, color: '#333', fontWeight: '500' },
 });

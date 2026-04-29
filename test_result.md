@@ -403,11 +403,76 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Customer Search API (/api/customers/search)"
-    - "Vendor Search API (/api/vendors/search)"
-  stuck_tasks: []
+    - "Product Varieties (Phase 3)"
+    - "Sale Items with Variety (Phase 3)"
+    - "Cancelled Sales in Customer Ledger (Phase 3)"
+    - "Cancelled Purchases in Vendor Ledger (Phase 3)"
+    - "GET /api/sales/{sale_id} no ObjectId leak (Phase 3)"
+  stuck_tasks:
+    - "Cancelled Purchases in Vendor Ledger (Phase 3)"
   test_all: false
   test_priority: "high_first"
+
+backend_phase3:
+  - task: "Product Varieties (Phase 3)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "All 4 variety sub-tests passed. 1) POST /api/products with varieties=[{name:'Basmati',name_hi:'बासमती'},{name:'Sona Masoori'}] returns 200, each variety gets auto UUID id. 2) GET /api/products shows both varieties preserved. 3) PUT /api/products/{id} with varieties=[{name:'Swarna'}] overwrites correctly, new UUID assigned. 4) POST /api/products without varieties field returns 200 with varieties=[] (backward compatible)."
+
+  - task: "Sale Items with Variety (Phase 3)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "POST /api/sales with items carrying variety_id+variety_name returns 200 and persists both fields. GET /api/sales/{id} returns the sale with variety fields intact and no _id leakage."
+
+  - task: "Cancelled Sales in Customer Ledger (Phase 3)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "All assertions passed. After DELETE /api/sales/{id}?reason=test cancel: (a) sale still appears in ledger.transactions, (b) is_cancelled=True, (c) deleted_at populated, (d) deletion_reason='test cancel', (e) debit=0, (f) summary.total_billed and summary.total_credit_given both exclude the cancelled sale (pre=300 → post=0)."
+
+  - task: "Cancelled Purchases in Vendor Ledger (Phase 3)"
+    implemented: false
+    working: false
+    file: "/app/backend/server.py"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: false
+        agent: "testing"
+        comment: "CRITICAL GAP: The ledger display logic for cancelled vendor procurements is in place (get_vendor_ledger() reads is_deleted, deleted_at, deletion_reason from procurement docs and sets debit=0 + excludes from totals). HOWEVER, there is NO DELETE endpoint for /api/vendor-procurement/{id}. Tried DELETE /api/vendor-procurement/{id}, DELETE /api/vendor-procurement/{id}?reason=..., DELETE /api/purchases/{id} — all return 404. Without a deletion endpoint that soft-marks the procurement as is_deleted=True + reverses stock/vendor ledger + populates deleted_at/deletion_reason, the new 'cancelled purchases' behavior cannot actually occur in production. Main agent must add a DELETE /api/vendor-procurement/{id}?reason=... endpoint that mirrors the delete_sale() logic (soft-delete, stock reversal, vendor outstanding_dues reversal, audit log)."
+
+  - task: "GET /api/sales/{sale_id} full doc (Phase 3)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "GET /api/sales/{id} returns full sale document: has items, outlet_name, outlet_address; no _id leak. JSON parses cleanly (no ObjectId serialization error)."
 
 agent_communication:
   - agent: "main"
@@ -497,6 +562,31 @@ agent_communication:
       
       Fixed Issues During Testing:
       - Fixed uuid4() import error in farmer purchase endpoint (line 1823 in server.py)
+
+  - agent: "main"
+    message: "Phase 3 — Cancelled Transactions, Product Varieties, Bottom Nav Fix (Feb 2026):
+
+      BACKEND CHANGES (/app/backend/server.py):
+      1. Added `ProductVariety` model + `varieties: List[ProductVariety] = []` to `ProductBase`. Allows multiple named varieties per product (e.g., Rice → Basmati, Sona Masoori). Backward compatible — existing products get empty list.
+      2. Added `variety_id` and `variety_name` optional fields to `SaleItemBase` and `VendorProcurementBase` so sales/purchase items can reference a variety.
+      3. `GET /api/customers/{id}/ledger`: Cancelled (`is_deleted=True`) sales are now INCLUDED in timeline but flagged `is_cancelled=True`, with debit=0 and fields `deleted_at` + `deletion_reason`. Totals exclude cancelled.
+      4. `GET /api/vendors/{id}/ledger`: Same treatment for cancelled purchases.
+      5. `GET /api/sales/{sale_id}`: Cleaned `_id` before return so the frontend invoice modal can hydrate the full sale object.
+
+      FRONTEND CHANGES:
+      1. `/app/frontend/app/(admin)/manage.tsx` — Products form: added varieties manager (add/remove chips with English + Hindi names). List shows 'N varieties' indicator. POST/PUT includes `varieties` field.
+      2. `/app/frontend/app/(admin)/sales.tsx` — Extended `addItem` flow: products with varieties pop a variety picker modal; items track `variety_id`, cart key becomes `product_id__variety_id` so same product with different varieties stays separate.
+      3. `/app/frontend/app/(agent)/sales.tsx` — Same variety picker flow.
+      4. `/app/frontend/app/(admin)/khata.tsx` — Cancelled sales now show with red 'CANCELLED' badge + strikethrough amount + deletion reason. Tapping any sale row opens a detailed Invoice Modal that shows items, subtotal, discount, totals, payment mode, outstanding — plus a big red 'THIS INVOICE HAS BEEN CANCELLED' banner if `is_deleted`.
+      5. `/app/frontend/app/(admin)/_layout.tsx`, `(agent)/_layout.tsx`, `(farmer)/_layout.tsx` — Bottom tab bar now respects `useSafeAreaInsets().bottom`. On Android devices with gesture/navigation bar, the bar floats above system UI instead of clashing.
+
+      TESTING NEEDED (backend only — frontend testing awaits user permission):
+      - Create a product via POST /api/products with varieties like [{name:'Basmati'}, {name:'Sona Masoori'}]; GET /api/products and verify varieties returned.
+      - POST /api/sales with item containing variety_id/variety_name; verify it's persisted.
+      - Create a sale → DELETE it → GET /api/customers/{id}/ledger → verify the sale shows with is_cancelled=true, debit=0, deletion_reason present; verify totals exclude it.
+      - GET /api/sales/{sale_id} returns full sale doc without _id (no ObjectId serialization error).
+      - Regression: POST /api/products without varieties field still works."
+
       - Removed non-existent /reports/customers endpoint from test (only /reports/customers/export exists)
       
   - agent: "main"
@@ -563,4 +653,18 @@ agent_communication:
       - GET /api/vendors/{id}/ledger returns full ledger structure
       - DELETE /api/sales/{sale_id} performs auto-reversal correctly (stock + customer ledger)
       
+  - agent: "testing"
+    message: |
+      Phase 3 (Cancelled Transactions + Product Varieties) backend testing completed. Test file: /app/backend_test_phase3.py — 22/23 passed.
+
+      PASS: Product Varieties — POST with varieties (auto-UUID per variety), GET preserves both, PUT overwrites, POST without varieties defaults to [] (backward compat).
+      PASS: Sale with Variety — POST /api/sales with variety_id/variety_name in items persists correctly; GET /api/sales/{id} returns them intact.
+      PASS: Cancelled sales in customer ledger — DELETE /api/sales/{id}?reason=test cancel works. Ledger response shows cancelled sale with is_cancelled=True, deleted_at populated, deletion_reason='test cancel', debit=0. summary.total_billed and summary.total_credit_given correctly exclude the cancelled sale.
+      PASS: GET /api/sales/{id} — full doc returned with items, outlet_name, outlet_address; no _id leak.
+      PASS: Regressions — /api/customers/search, /api/vendors/search, POST /api/customers with shareholder+folio all pass.
+
+      FAIL (CRITICAL GAP): Cancelled purchases in vendor ledger cannot actually occur because there is NO DELETE endpoint for vendor-procurement. Tried DELETE /api/vendor-procurement/{id} (405), DELETE /api/vendor-procurement/{id}?reason=... (405), DELETE /api/purchases/{id}?reason=... (404). The vendor ledger code already reads is_deleted/deleted_at/deletion_reason from procurement docs (line 2691-2706 of server.py), but without an endpoint to set those fields and reverse stock + outstanding_dues, the feature is non-functional in production.
+
+      Main agent must add DELETE /api/vendor-procurement/{procurement_id}?reason=... mirroring delete_sale() — soft-mark is_deleted, deleted_at, deletion_reason; reverse stock at outlet; reverse vendor.outstanding_dues/total_purchases/total_paid/transaction_count; write TransactionDeletionLog with transaction_type='vendor_procurement'.
+
       Test artifacts use TEST_<uuid> prefix. No data wiped. Created /app/backend_test.py with all tests."
