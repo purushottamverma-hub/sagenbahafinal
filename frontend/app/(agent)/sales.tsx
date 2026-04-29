@@ -720,150 +720,148 @@ export default function AgentSalesScreen() {
               </View>
             )}
 
-            {/* 2. PRODUCTS/ITEMS - after customer confirmed */}
-            {customerSelectionMode === 'confirmed' && (
-              <View onLayout={(e) => { productsSectionY.current = e.nativeEvent.layout.y; }}>
-                <Text style={styles.label}>{t('products')}</Text>
-                <Input
-                  placeholder={language === 'hi' ? 'उत्पाद खोजें...' : 'Search products...'}
-                  value={productSearch}
-                  onChangeText={setProductSearch}
-                  containerStyle={{ marginBottom: 10 }}
-                />
-                <View style={styles.productGrid}>
-                  {filteredProducts.map(product => (
-                    <TouchableOpacity
-                      key={product.id}
-                      style={styles.productChip}
-                      onPress={() => addItem(product)}
-                    >
-                      <Text style={styles.productChipText}>
-                        {language === 'hi' && product.name_hi ? product.name_hi : product.name}
-                      </Text>
-                      <Text style={styles.productUnit}>({product.unit})</Text>
-                      {product.varieties && product.varieties.length > 0 && (
-                        <View style={styles.varietyBadge}>
-                          <Ionicons name="layers-outline" size={10} color="#FFF" />
-                          <Text style={styles.varietyBadgeText}>{product.varieties.length}</Text>
-                        </View>
-                      )}
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                {/* Sale Items */}
-                {saleItems.length > 0 && (
-                  <View style={styles.itemsSection} onLayout={(e) => { itemsSectionY.current = productsSectionY.current + e.nativeEvent.layout.y; }}>
-                    <Text style={styles.label}>{language === 'hi' ? 'आइटम्स' : 'Items'}</Text>
-                    {saleItems.map(item => (
-                      <View key={`${item.product_id}${item.variety_id ? '__' + item.variety_id : ''}`} style={styles.itemRow}>
-                        <View style={styles.itemInfo}>
-                          <Text style={styles.itemName}>{item.product_name}</Text>
-                          <TouchableOpacity onPress={() => removeItem(item.product_id, item.variety_id)}>
-                            <Ionicons name="trash-outline" size={18} color="#D32F2F" />
-                          </TouchableOpacity>
-                        </View>
-                        <View style={styles.itemInputs}>
-                          <Input
-                            placeholder={t('quantity')}
-                            value={item.quantity.toString()}
-                            onChangeText={(val) => updateItemQty(item.product_id, val, item.variety_id)}
-                            keyboardType="decimal-pad"
-                            containerStyle={styles.qtyInput}
-                          />
-                          <Text style={styles.multiply}>×</Text>
-                          <Input
-                            placeholder={t('rate')}
-                            value={item.rate > 0 ? item.rate.toString() : ''}
-                            onChangeText={(val) => updateItemRate(item.product_id, val, item.variety_id)}
-                            keyboardType="decimal-pad"
-                            containerStyle={styles.rateInput}
-                          />
-                          <Text style={styles.equals}>=</Text>
-                          <Text style={styles.itemAmount}>{formatCurrency(item.amount)}</Text>
-                        </View>
-                      </View>
-                    ))}
-
-                    {/* 3. DISCOUNT + Totals */}
-                    <View style={styles.totalsSection}>
-                      <View style={styles.totalRow}>
-                        <Text style={styles.totalLabel}>{t('subtotal')}</Text>
-                        <Text style={styles.totalValue}>{formatCurrency(getSubtotal())}</Text>
-                      </View>
-                      <Input
-                        label={t('discount')}
-                        placeholder="0"
-                        value={discount}
-                        onChangeText={setDiscount}
-                        keyboardType="decimal-pad"
-                        containerStyle={styles.discountInput}
-                      />
-                      <View style={styles.totalRow}>
-                        <Text style={styles.grandTotalLabel}>{t('total')}</Text>
-                        <Text style={styles.grandTotalValue}>{formatCurrency(getTotal())}</Text>
-                      </View>
-                    </View>
-
-                    {/* 4. PAYMENT MODE */}
-                    <Text style={styles.label}>{t('paymentMode')}</Text>
-                    <View style={styles.paymentModes}>
-                      {['cash', 'online', 'credit', 'partial'].map(mode => (
-                        <TouchableOpacity
-                          key={mode}
-                          style={[
-                            styles.paymentModeBtn,
-                            paymentMode === mode && styles.paymentModeBtnActive
-                          ]}
-                          onPress={() => setPaymentMode(mode)}
-                        >
-                          <Text style={[
-                            styles.paymentModeText,
-                            paymentMode === mode && styles.paymentModeTextActive
-                          ]}>
-                            {mode === 'cash' ? t('cash') :
-                             mode === 'online' ? t('online') :
-                             mode === 'credit' ? t('credit') : t('partial')}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-
-                    {paymentMode === 'partial' && (
-                      <View style={styles.partialInputs}>
-                        <Input
-                          label={t('cashAmount')}
-                          placeholder="0"
-                          value={cashAmount}
-                          onChangeText={setCashAmount}
-                          keyboardType="decimal-pad"
-                          containerStyle={styles.partialInput}
-                        />
-                        <Input
-                          label={t('onlineAmount')}
-                          placeholder="0"
-                          value={onlineAmount}
-                          onChangeText={setOnlineAmount}
-                          keyboardType="decimal-pad"
-                          containerStyle={styles.partialInput}
-                        />
-                        <Text style={styles.creditCalc}>
-                          {t('creditAmount')}: {formatCurrency(Math.max(0, getTotal() - (parseFloat(cashAmount) || 0) - (parseFloat(onlineAmount) || 0)))}
-                        </Text>
+            {/* 2. PRODUCTS/ITEMS - always visible */}
+            <View onLayout={(e) => { productsSectionY.current = e.nativeEvent.layout.y; }}>
+              <Text style={styles.label}>{t('products')}</Text>
+              <Input
+                placeholder={language === 'hi' ? 'उत्पाद खोजें...' : 'Search products...'}
+                value={productSearch}
+                onChangeText={setProductSearch}
+                containerStyle={{ marginBottom: 10 }}
+              />
+              <View style={styles.productGrid}>
+                {filteredProducts.map(product => (
+                  <TouchableOpacity
+                    key={product.id}
+                    style={styles.productChip}
+                    onPress={() => addItem(product)}
+                  >
+                    <Text style={styles.productChipText}>
+                      {language === 'hi' && product.name_hi ? product.name_hi : product.name}
+                    </Text>
+                    <Text style={styles.productUnit}>({product.unit})</Text>
+                    {product.varieties && product.varieties.length > 0 && (
+                      <View style={styles.varietyBadge}>
+                        <Ionicons name="layers-outline" size={10} color="#FFF" />
+                        <Text style={styles.varietyBadgeText}>{product.varieties.length}</Text>
                       </View>
                     )}
-
-                    <Button
-                      title={t('generateBill')}
-                      onPress={handleCreateSale}
-                      loading={submitting}
-                      size="large"
-                      style={styles.generateBtn}
-                    />
-                  </View>
-                )}
+                  </TouchableOpacity>
+                ))}
               </View>
-            )}
+
+              {/* Sale Items */}
+              {saleItems.length > 0 && (
+                <View style={styles.itemsSection} onLayout={(e) => { itemsSectionY.current = productsSectionY.current + e.nativeEvent.layout.y; }}>
+                  <Text style={styles.label}>{language === 'hi' ? 'आइटम्स' : 'Items'}</Text>
+                  {saleItems.map(item => (
+                    <View key={`${item.product_id}${item.variety_id ? '__' + item.variety_id : ''}`} style={styles.itemRow}>
+                      <View style={styles.itemInfo}>
+                        <Text style={styles.itemName}>{item.product_name}</Text>
+                        <TouchableOpacity onPress={() => removeItem(item.product_id, item.variety_id)}>
+                          <Ionicons name="trash-outline" size={18} color="#D32F2F" />
+                        </TouchableOpacity>
+                      </View>
+                      <View style={styles.itemInputs}>
+                        <Input
+                          placeholder={t('quantity')}
+                          value={item.quantity.toString()}
+                          onChangeText={(val) => updateItemQty(item.product_id, val, item.variety_id)}
+                          keyboardType="decimal-pad"
+                          containerStyle={styles.qtyInput}
+                        />
+                        <Text style={styles.multiply}>×</Text>
+                        <Input
+                          placeholder={t('rate')}
+                          value={item.rate > 0 ? item.rate.toString() : ''}
+                          onChangeText={(val) => updateItemRate(item.product_id, val, item.variety_id)}
+                          keyboardType="decimal-pad"
+                          containerStyle={styles.rateInput}
+                        />
+                        <Text style={styles.equals}>=</Text>
+                        <Text style={styles.itemAmount}>{formatCurrency(item.amount)}</Text>
+                      </View>
+                    </View>
+                  ))}
+
+                  {/* 3. DISCOUNT + Totals */}
+                  <View style={styles.totalsSection}>
+                    <View style={styles.totalRow}>
+                      <Text style={styles.totalLabel}>{t('subtotal')}</Text>
+                      <Text style={styles.totalValue}>{formatCurrency(getSubtotal())}</Text>
+                    </View>
+                    <Input
+                      label={t('discount')}
+                      placeholder="0"
+                      value={discount}
+                      onChangeText={setDiscount}
+                      keyboardType="decimal-pad"
+                      containerStyle={styles.discountInput}
+                    />
+                    <View style={styles.totalRow}>
+                      <Text style={styles.grandTotalLabel}>{t('total')}</Text>
+                      <Text style={styles.grandTotalValue}>{formatCurrency(getTotal())}</Text>
+                    </View>
+                  </View>
+
+                  {/* 4. PAYMENT MODE */}
+                  <Text style={styles.label}>{t('paymentMode')}</Text>
+                  <View style={styles.paymentModes}>
+                    {['cash', 'online', 'credit', 'partial'].map(mode => (
+                      <TouchableOpacity
+                        key={mode}
+                        style={[
+                          styles.paymentModeBtn,
+                          paymentMode === mode && styles.paymentModeBtnActive
+                        ]}
+                        onPress={() => setPaymentMode(mode)}
+                      >
+                        <Text style={[
+                          styles.paymentModeText,
+                          paymentMode === mode && styles.paymentModeTextActive
+                        ]}>
+                          {mode === 'cash' ? t('cash') :
+                           mode === 'online' ? t('online') :
+                           mode === 'credit' ? t('credit') : t('partial')}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  {paymentMode === 'partial' && (
+                    <View style={styles.partialInputs}>
+                      <Input
+                        label={t('cashAmount')}
+                        placeholder="0"
+                        value={cashAmount}
+                        onChangeText={setCashAmount}
+                        keyboardType="decimal-pad"
+                        containerStyle={styles.partialInput}
+                      />
+                      <Input
+                        label={t('onlineAmount')}
+                        placeholder="0"
+                        value={onlineAmount}
+                        onChangeText={setOnlineAmount}
+                        keyboardType="decimal-pad"
+                        containerStyle={styles.partialInput}
+                      />
+                      <Text style={styles.creditCalc}>
+                        {t('creditAmount')}: {formatCurrency(Math.max(0, getTotal() - (parseFloat(cashAmount) || 0) - (parseFloat(onlineAmount) || 0)))}
+                      </Text>
+                    </View>
+                  )}
+
+                  <Button
+                    title={t('generateBill')}
+                    onPress={handleCreateSale}
+                    loading={submitting}
+                    size="large"
+                    style={styles.generateBtn}
+                  />
+                </View>
+              )}
+            </View>
           </ScrollView>
         </SafeAreaView>
       </Modal>

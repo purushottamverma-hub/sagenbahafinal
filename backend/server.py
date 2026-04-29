@@ -2592,6 +2592,125 @@ async def search_vendors(
         "outstanding_dues": v.get("outstanding_dues", 0)
     } for v in vendors]
 
+
+# ===================== GLOBAL SEARCH =====================
+
+@api_router.get("/search/global")
+async def global_search(
+    q: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Unified search across customers, vendors, products, sales (bill#), and outlets.
+    Returns results grouped by category, up to 10 per group.
+    """
+    if not q or len(q.strip()) < 1:
+        return {
+            "customers": [], "vendors": [], "products": [],
+            "sales": [], "outlets": [], "total": 0
+        }
+
+    import re
+    safe_q = re.escape(q.strip())
+    rx = {"$regex": safe_q, "$options": "i"}
+
+    # --- Customers ---
+    customers_raw = await db.customers.find({
+        "is_active": True,
+        "$or": [
+            {"name": rx}, {"mobile": rx}, {"village": rx},
+            {"address": rx}, {"folio_number": rx},
+        ]
+    }).limit(10).to_list(10)
+    customers = [{
+        "id": c["id"],
+        "name": c.get("name", ""),
+        "mobile": c.get("mobile", ""),
+        "village": c.get("village", ""),
+        "address": c.get("address", ""),
+        "customer_type": c.get("customer_type", ""),
+        "folio_number": c.get("folio_number", ""),
+        "outstanding_balance": c.get("outstanding_balance", 0),
+    } for c in customers_raw]
+
+    # --- Vendors ---
+    vendors_raw = await db.vendors.find({
+        "is_active": True,
+        "$or": [
+            {"name": rx}, {"mobile": rx}, {"village": rx}, {"address": rx},
+        ]
+    }).limit(10).to_list(10)
+    vendors = [{
+        "id": v["id"],
+        "name": v.get("name", ""),
+        "mobile": v.get("mobile", ""),
+        "village": v.get("village", ""),
+        "address": v.get("address", ""),
+        "outstanding_dues": v.get("outstanding_dues", 0),
+    } for v in vendors_raw]
+
+    # --- Products ---
+    products_raw = await db.products.find({
+        "is_active": True,
+        "$or": [
+            {"name": rx}, {"name_hi": rx},
+            {"description": rx}, {"category": rx},
+            {"varieties.name": rx}, {"varieties.name_hi": rx},
+        ]
+    }).limit(10).to_list(10)
+    products = [{
+        "id": p["id"],
+        "name": p.get("name", ""),
+        "name_hi": p.get("name_hi", ""),
+        "unit": p.get("unit", ""),
+        "category": p.get("category", ""),
+        "varieties_count": len(p.get("varieties", []) or []),
+    } for p in products_raw]
+
+    # --- Sales (bill number, customer name) ---
+    sales_raw = await db.sales.find({
+        "$or": [
+            {"bill_number": rx},
+            {"customer_name": rx},
+        ]
+    }).sort("created_at", -1).limit(10).to_list(10)
+    sales = [{
+        "id": s["id"],
+        "bill_number": s.get("bill_number", ""),
+        "customer_name": s.get("customer_name", ""),
+        "customer_id": s.get("customer_id"),
+        "total_amount": s.get("total_amount", 0),
+        "payment_mode": s.get("payment_mode", ""),
+        "created_at": s.get("created_at").isoformat() if isinstance(s.get("created_at"), datetime) else str(s.get("created_at", "")),
+        "is_deleted": s.get("is_deleted", False),
+    } for s in sales_raw]
+
+    # --- Outlets ---
+    outlets_raw = await db.outlets.find({
+        "is_active": True,
+        "$or": [{"name": rx}, {"address": rx}, {"manager_name": rx}]
+    }).limit(10).to_list(10)
+    outlets = [{
+        "id": o["id"],
+        "name": o.get("name", ""),
+        "address": o.get("address", ""),
+        "manager_name": o.get("manager_name", ""),
+        "outlet_type": o.get("outlet_type", ""),
+    } for o in outlets_raw]
+
+    total = len(customers) + len(vendors) + len(products) + len(sales) + len(outlets)
+
+    return {
+        "query": q.strip(),
+        "customers": customers,
+        "vendors": vendors,
+        "products": products,
+        "sales": sales,
+        "outlets": outlets,
+        "total": total,
+    }
+
+
 @api_router.get("/vendors/with-dues")
 async def get_vendors_with_dues(current_user: dict = Depends(get_current_user)):
     """Get all vendors with outstanding dues (for Khata overview)"""
