@@ -39,6 +39,9 @@ interface Customer {
   id: string;
   name: string;
   mobile?: string;
+  address?: string;
+  village?: string;
+  customer_type?: string;
   outstanding_balance: number;
 }
 
@@ -91,6 +94,20 @@ export default function SalesScreen() {
   const [discount, setDiscount] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  // Customer Selection Flow State
+  const [customerSelectionMode, setCustomerSelectionMode] = useState<'select' | 'new' | 'existing' | 'confirmed'>('select');
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [searchResults, setSearchResults] = useState<Customer[]>([]);
+  const [searchingCustomers, setSearchingCustomers] = useState(false);
+  const [newCustomerData, setNewCustomerData] = useState({
+    name: '',
+    mobile: '',
+    address: '',
+    village: '',
+  });
+  const [creatingCustomer, setCreatingCustomer] = useState(false);
+  const [confirmedCustomer, setConfirmedCustomer] = useState<Customer | null>(null);
+
   const fetchData = async () => {
     try {
       const [salesRes, productsRes, outletsRes, customersRes] = await Promise.all([
@@ -122,6 +139,83 @@ export default function SalesScreen() {
     setRefreshing(true);
     fetchData();
   }, []);
+
+  // Customer Search Function
+  const searchCustomers = async (query: string) => {
+    if (!query || query.length < 2) {
+      setSearchResults([]);
+      return;
+    }
+    
+    setSearchingCustomers(true);
+    try {
+      const response = await api.get('/customers/search', { params: { q: query } });
+      setSearchResults(response.data);
+    } catch (error) {
+      console.error('Search error:', error);
+      setSearchResults([]);
+    } finally {
+      setSearchingCustomers(false);
+    }
+  };
+
+  // Create New Customer and auto-create Khata
+  const handleCreateNewCustomer = async () => {
+    if (!newCustomerData.name.trim()) {
+      Alert.alert(t('error'), language === 'hi' ? 'ग्राहक का नाम आवश्यक है' : 'Customer name is required');
+      return;
+    }
+
+    setCreatingCustomer(true);
+    try {
+      const response = await api.post('/customers', {
+        name: newCustomerData.name.trim(),
+        mobile: newCustomerData.mobile.trim() || null,
+        address: newCustomerData.address.trim() || null,
+        village: newCustomerData.village.trim() || null,
+        customer_type: 'registered',
+      });
+      
+      const newCustomer: Customer = response.data;
+      setConfirmedCustomer(newCustomer);
+      setSelectedCustomer(newCustomer.id);
+      setCustomerName(newCustomer.name);
+      setCustomerSelectionMode('confirmed');
+      
+      // Refresh customers list
+      fetchData();
+      
+      Alert.alert(
+        t('success'),
+        language === 'hi' 
+          ? `ग्राहक "${newCustomer.name}" सफलतापूर्वक जोड़ा गया। खाता (Khata) स्वचालित रूप से बन गया।`
+          : `Customer "${newCustomer.name}" added successfully. Khata (Ledger) auto-created.`
+      );
+    } catch (error: any) {
+      Alert.alert(t('error'), error.response?.data?.detail || 'Failed to create customer');
+    } finally {
+      setCreatingCustomer(false);
+    }
+  };
+
+  // Select existing customer
+  const handleSelectExistingCustomer = (customer: Customer) => {
+    setConfirmedCustomer(customer);
+    setSelectedCustomer(customer.id);
+    setCustomerName(customer.name);
+    setCustomerSelectionMode('confirmed');
+  };
+
+  // Reset customer selection
+  const resetCustomerSelection = () => {
+    setCustomerSelectionMode('select');
+    setConfirmedCustomer(null);
+    setSelectedCustomer('');
+    setCustomerName('');
+    setCustomerSearch('');
+    setSearchResults([]);
+    setNewCustomerData({ name: '', mobile: '', address: '', village: '' });
+  };
 
   const formatCurrency = (amount: number) => `${t('currency')}${amount.toLocaleString('en-IN')}`;
 
@@ -177,9 +271,26 @@ export default function SalesScreen() {
     setCashAmount('');
     setOnlineAmount('');
     setDiscount('');
+    // Reset customer selection flow
+    setCustomerSelectionMode('select');
+    setConfirmedCustomer(null);
+    setCustomerSearch('');
+    setSearchResults([]);
+    setNewCustomerData({ name: '', mobile: '', address: '', village: '' });
   };
 
   const handleCreateSale = async () => {
+    // Mandatory customer selection check
+    if (customerSelectionMode !== 'confirmed' || !confirmedCustomer) {
+      Alert.alert(
+        t('error'), 
+        language === 'hi' 
+          ? 'कृपया पहले ग्राहक चुनें। बिल बनाने से पहले ग्राहक चयन आवश्यक है।' 
+          : 'Please select a customer first. Customer selection is mandatory before creating a bill.'
+      );
+      return;
+    }
+
     if (saleItems.length === 0) {
       Alert.alert(t('error'), language === 'hi' ? 'कम से कम एक आइटम जोड़ें' : 'Add at least one item');
       return;
@@ -199,27 +310,19 @@ export default function SalesScreen() {
       online = total;
     } else if (paymentMode === 'credit') {
       credit = total;
-      if (!selectedCustomer && !customerName.trim()) {
-        Alert.alert(t('error'), language === 'hi' ? 'उधार के लिए ग्राहक चुनें' : 'Select customer for credit sale');
-        return;
-      }
     } else if (paymentMode === 'partial') {
       cash = parseFloat(cashAmount) || 0;
       online = parseFloat(onlineAmount) || 0;
       credit = Math.max(0, total - cash - online);
-      if (credit > 0 && !selectedCustomer && !customerName.trim()) {
-        Alert.alert(t('error'), language === 'hi' ? 'उधार के लिए ग्राहक चुनें' : 'Select customer for credit sale');
-        return;
-      }
     }
 
     setSubmitting(true);
     try {
-      const customer = customers.find(c => c.id === selectedCustomer);
+      // Use confirmed customer from the new flow
       const saleData = {
         outlet_id: selectedOutlet,
-        customer_id: selectedCustomer || null,
-        customer_name: selectedCustomer ? customer?.name : customerName || null,
+        customer_id: confirmedCustomer?.id || null,
+        customer_name: confirmedCustomer?.name || null,
         items: saleItems,
         subtotal: getSubtotal(),
         discount: parseFloat(discount) || 0,
@@ -503,48 +606,195 @@ export default function SalesScreen() {
                 </View>
 
                 {/* Customer */}
-                <Text style={styles.label}>{t('selectCustomer')}</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.customerScroll}>
-                  <TouchableOpacity
-                    style={[
-                      styles.customerChip,
-                      !selectedCustomer && styles.customerChipActive
-                    ]}
-                    onPress={() => setSelectedCustomer('')}
-                  >
-                    <Text style={[
-                      styles.customerChipText,
-                      !selectedCustomer && styles.customerChipTextActive
-                    ]}>
-                      {t('walkInCustomer')}
+                <Text style={styles.label}>{t('selectCustomer')} *</Text>
+                
+                {/* Customer Selection Flow - MANDATORY */}
+                {customerSelectionMode === 'select' && (
+                  <View style={styles.customerSelectionContainer}>
+                    <Text style={styles.customerSelectionTitle}>
+                      {language === 'hi' ? 'ग्राहक चयन (आवश्यक)' : 'Customer Selection (Required)'}
                     </Text>
-                  </TouchableOpacity>
-                  {customers.map(customer => (
+                    <View style={styles.customerSelectionOptions}>
+                      <TouchableOpacity
+                        style={styles.customerOptionBtn}
+                        onPress={() => setCustomerSelectionMode('new')}
+                      >
+                        <Ionicons name="person-add" size={28} color="#2E7D32" />
+                        <Text style={styles.customerOptionText}>
+                          {language === 'hi' ? 'नया ग्राहक' : 'New Customer'}
+                        </Text>
+                        <Text style={styles.customerOptionSubtext}>
+                          {language === 'hi' ? 'नया खाता बनाएं' : 'Create new Khata'}
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.customerOptionBtn}
+                        onPress={() => setCustomerSelectionMode('existing')}
+                      >
+                        <Ionicons name="search" size={28} color="#1976D2" />
+                        <Text style={styles.customerOptionText}>
+                          {language === 'hi' ? 'मौजूदा ग्राहक' : 'Existing Customer'}
+                        </Text>
+                        <Text style={styles.customerOptionSubtext}>
+                          {language === 'hi' ? 'नाम/मोबाइल से खोजें' : 'Search by name/mobile'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
+
+                {/* New Customer Form */}
+                {customerSelectionMode === 'new' && (
+                  <View style={styles.customerFormContainer}>
+                    <View style={styles.customerFormHeader}>
+                      <TouchableOpacity onPress={() => setCustomerSelectionMode('select')}>
+                        <Ionicons name="arrow-back" size={24} color="#333" />
+                      </TouchableOpacity>
+                      <Text style={styles.customerFormTitle}>
+                        {language === 'hi' ? 'नया ग्राहक जोड़ें' : 'Add New Customer'}
+                      </Text>
+                    </View>
+                    <Input
+                      label={`${t('customerName')} *`}
+                      placeholder={language === 'hi' ? 'ग्राहक का नाम दर्ज करें' : 'Enter customer name'}
+                      value={newCustomerData.name}
+                      onChangeText={(val) => setNewCustomerData({ ...newCustomerData, name: val })}
+                    />
+                    <Input
+                      label={t('mobile')}
+                      placeholder={language === 'hi' ? 'मोबाइल नंबर' : 'Mobile number'}
+                      value={newCustomerData.mobile}
+                      onChangeText={(val) => setNewCustomerData({ ...newCustomerData, mobile: val })}
+                      keyboardType="phone-pad"
+                    />
+                    <Input
+                      label={t('address')}
+                      placeholder={language === 'hi' ? 'पता दर्ज करें' : 'Enter address'}
+                      value={newCustomerData.address}
+                      onChangeText={(val) => setNewCustomerData({ ...newCustomerData, address: val })}
+                    />
+                    <Input
+                      label={t('village')}
+                      placeholder={language === 'hi' ? 'गाँव का नाम' : 'Village name'}
+                      value={newCustomerData.village}
+                      onChangeText={(val) => setNewCustomerData({ ...newCustomerData, village: val })}
+                    />
+                    <Button
+                      title={language === 'hi' ? 'ग्राहक जोड़ें और खाता बनाएं' : 'Add Customer & Create Khata'}
+                      onPress={handleCreateNewCustomer}
+                      loading={creatingCustomer}
+                      style={styles.createCustomerBtn}
+                    />
+                  </View>
+                )}
+
+                {/* Existing Customer Search */}
+                {customerSelectionMode === 'existing' && (
+                  <View style={styles.customerFormContainer}>
+                    <View style={styles.customerFormHeader}>
+                      <TouchableOpacity onPress={() => setCustomerSelectionMode('select')}>
+                        <Ionicons name="arrow-back" size={24} color="#333" />
+                      </TouchableOpacity>
+                      <Text style={styles.customerFormTitle}>
+                        {language === 'hi' ? 'ग्राहक खोजें' : 'Search Customer'}
+                      </Text>
+                    </View>
+                    <View style={styles.searchInputContainer}>
+                      <Ionicons name="search" size={20} color="#999" style={styles.searchIconInner} />
+                      <Input
+                        placeholder={language === 'hi' ? 'नाम या मोबाइल नंबर दर्ज करें' : 'Enter name or mobile number'}
+                        value={customerSearch}
+                        onChangeText={(val) => {
+                          setCustomerSearch(val);
+                          searchCustomers(val);
+                        }}
+                        containerStyle={styles.searchInputWrapper}
+                      />
+                    </View>
+                    
+                    {searchingCustomers && (
+                      <Text style={styles.searchingText}>
+                        {language === 'hi' ? 'खोज रहे हैं...' : 'Searching...'}
+                      </Text>
+                    )}
+                    
+                    {searchResults.length > 0 && (
+                      <View style={styles.searchResultsContainer}>
+                        <Text style={styles.searchResultsTitle}>
+                          {language === 'hi' ? 'परिणाम:' : 'Results:'}
+                        </Text>
+                        {searchResults.map(customer => (
+                          <TouchableOpacity
+                            key={customer.id}
+                            style={styles.searchResultItem}
+                            onPress={() => handleSelectExistingCustomer(customer)}
+                          >
+                            <View style={styles.searchResultInfo}>
+                              <Text style={styles.searchResultName}>{customer.name}</Text>
+                              {customer.mobile && (
+                                <Text style={styles.searchResultMobile}>
+                                  <Ionicons name="call-outline" size={12} color="#666" /> {customer.mobile}
+                                </Text>
+                              )}
+                              {customer.village && (
+                                <Text style={styles.searchResultVillage}>
+                                  <Ionicons name="location-outline" size={12} color="#666" /> {customer.village}
+                                </Text>
+                              )}
+                            </View>
+                            <View style={styles.searchResultAction}>
+                              <Ionicons name="chevron-forward" size={20} color="#2E7D32" />
+                            </View>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    )}
+                    
+                    {customerSearch.length >= 2 && searchResults.length === 0 && !searchingCustomers && (
+                      <View style={styles.noResultsContainer}>
+                        <Text style={styles.noResultsText}>
+                          {language === 'hi' ? 'कोई ग्राहक नहीं मिला' : 'No customer found'}
+                        </Text>
+                        <Button
+                          title={language === 'hi' ? 'नया ग्राहक बनाएं' : 'Create New Customer'}
+                          onPress={() => {
+                            setNewCustomerData({ ...newCustomerData, name: customerSearch });
+                            setCustomerSelectionMode('new');
+                          }}
+                          variant="outline"
+                          style={styles.createNewFromSearchBtn}
+                        />
+                      </View>
+                    )}
+                  </View>
+                )}
+
+                {/* Confirmed Customer Display */}
+                {customerSelectionMode === 'confirmed' && confirmedCustomer && (
+                  <View style={styles.confirmedCustomerContainer}>
+                    <View style={styles.confirmedCustomerInfo}>
+                      <Ionicons name="checkmark-circle" size={24} color="#2E7D32" />
+                      <View style={styles.confirmedCustomerDetails}>
+                        <Text style={styles.confirmedCustomerName}>{confirmedCustomer.name}</Text>
+                        {confirmedCustomer.mobile && (
+                          <Text style={styles.confirmedCustomerMobile}>{confirmedCustomer.mobile}</Text>
+                        )}
+                        {confirmedCustomer.outstanding_balance > 0 && (
+                          <Text style={styles.confirmedCustomerDue}>
+                            {language === 'hi' ? 'बकाया:' : 'Due:'} {formatCurrency(confirmedCustomer.outstanding_balance)}
+                          </Text>
+                        )}
+                      </View>
+                    </View>
                     <TouchableOpacity
-                      key={customer.id}
-                      style={[
-                        styles.customerChip,
-                        selectedCustomer === customer.id && styles.customerChipActive
-                      ]}
-                      onPress={() => setSelectedCustomer(customer.id)}
+                      style={styles.changeCustomerBtn}
+                      onPress={resetCustomerSelection}
                     >
-                      <Text style={[
-                        styles.customerChipText,
-                        selectedCustomer === customer.id && styles.customerChipTextActive
-                      ]}>
-                        {customer.name}
+                      <Text style={styles.changeCustomerText}>
+                        {language === 'hi' ? 'बदलें' : 'Change'}
                       </Text>
                     </TouchableOpacity>
-                  ))}
-                </ScrollView>
-
-                {!selectedCustomer && (
-                  <Input
-                    label={language === 'hi' ? 'ग्राहक का नाम (वैकल्पिक)' : 'Customer Name (optional)'}
-                    placeholder={language === 'hi' ? 'नाम दर्ज करें' : 'Enter name'}
-                    value={customerName}
-                    onChangeText={setCustomerName}
-                  />
+                  </View>
                 )}
 
                 {/* Payment Mode */}
@@ -1102,6 +1352,185 @@ const styles = StyleSheet.create({
   billActionText: {
     color: '#FFF',
     fontSize: 15,
+    fontWeight: '600',
+  },
+  // Customer Selection Flow Styles
+  customerSelectionContainer: {
+    backgroundColor: '#FFF',
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 8,
+    borderWidth: 2,
+    borderColor: '#E65100',
+    borderStyle: 'dashed',
+  },
+  customerSelectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#E65100',
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  customerSelectionOptions: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    gap: 12,
+  },
+  customerOptionBtn: {
+    flex: 1,
+    backgroundColor: '#F5F5F5',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  customerOptionText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginTop: 8,
+  },
+  customerOptionSubtext: {
+    fontSize: 11,
+    color: '#666',
+    marginTop: 4,
+  },
+  customerFormContainer: {
+    backgroundColor: '#FFF',
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 8,
+  },
+  customerFormHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+    gap: 12,
+  },
+  customerFormTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+  },
+  createCustomerBtn: {
+    marginTop: 16,
+  },
+  searchInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  searchIconInner: {
+    position: 'absolute',
+    left: 12,
+    zIndex: 1,
+  },
+  searchInputWrapper: {
+    flex: 1,
+    marginBottom: 0,
+  },
+  searchingText: {
+    textAlign: 'center',
+    color: '#666',
+    marginTop: 12,
+  },
+  searchResultsContainer: {
+    marginTop: 16,
+  },
+  searchResultsTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+  },
+  searchResultItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  searchResultInfo: {
+    flex: 1,
+  },
+  searchResultName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#333',
+  },
+  searchResultMobile: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 2,
+  },
+  searchResultVillage: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 2,
+  },
+  searchResultAction: {
+    padding: 4,
+  },
+  noResultsContainer: {
+    alignItems: 'center',
+    marginTop: 24,
+  },
+  noResultsText: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 12,
+  },
+  createNewFromSearchBtn: {
+    marginTop: 8,
+  },
+  confirmedCustomerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#E8F5E9',
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#2E7D32',
+  },
+  confirmedCustomerInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    gap: 12,
+  },
+  confirmedCustomerDetails: {
+    flex: 1,
+  },
+  confirmedCustomerName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+  },
+  confirmedCustomerMobile: {
+    fontSize: 13,
+    color: '#666',
+    marginTop: 2,
+  },
+  confirmedCustomerDue: {
+    fontSize: 12,
+    color: '#E65100',
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  changeCustomerBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: '#FFF',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#2E7D32',
+  },
+  changeCustomerText: {
+    fontSize: 13,
+    color: '#2E7D32',
     fontWeight: '600',
   },
 });
