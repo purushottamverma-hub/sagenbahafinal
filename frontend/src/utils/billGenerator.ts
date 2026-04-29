@@ -29,8 +29,8 @@ interface BillData {
 const translations = {
   en: {
     title: 'SALES INVOICE',
-    companyName: 'Sagen Baha Women FPO',
-    companySubtitle: 'Farmer Producer Company Limited',
+    companyName: 'Sagen Baha Women Farmer Producer Company Limited',
+    companySubtitle: 'FPO Business Transaction',
     address: 'Poraiyahat Block, Godda District, Jharkhand',
     billNo: 'Bill No',
     date: 'Date',
@@ -57,8 +57,8 @@ const translations = {
   },
   hi: {
     title: 'बिक्री रसीद',
-    companyName: 'सागेन बहा वूमेन FPO',
-    companySubtitle: 'फार्मर प्रोड्यूसर कंपनी लिमिटेड',
+    companyName: 'सागेन बहा वूमेन फार्मर प्रोड्यूसर कंपनी लिमिटेड',
+    companySubtitle: 'FPO व्यवसाय लेन-देन',
     address: 'पोरैयाहाट ब्लॉक, गोड्डा जिला, झारखंड',
     billNo: 'बिल नं',
     date: 'दिनांक',

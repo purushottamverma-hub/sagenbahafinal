@@ -58,6 +58,15 @@ export default function AgentLayout() {
         }}
       />
       <Tabs.Screen
+        name="khata"
+        options={{
+          title: t('khata') || 'Khata',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="book" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="stock"
         options={{
           title: t('stock'),
