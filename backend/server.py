@@ -27,6 +27,12 @@ db = client[os.environ.get('DB_NAME', 'fpo_database')]
 # Create the main app
 app = FastAPI(title="FPO Management System API")
 
+# Health check endpoint at root level (required for Kubernetes deployment)
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Kubernetes probes"""
+    return {"status": "healthy", "service": "fpo-backend"}
+
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
