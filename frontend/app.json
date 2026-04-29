@@ -43,7 +43,7 @@
       "typedRoutes": true
     },
     "extra": {
-      "expoHostname": "https://fpo-offline-trade.preview.emergentagent.com"
+      "expoHostname": "https://transaction-mgmt-dev.preview.emergentagent.com"
     }
   }
 }

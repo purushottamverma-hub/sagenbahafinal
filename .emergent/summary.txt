@@ -1,257 +1,177 @@
-<analysis>
-<original_problem_statement>
-Build a cross-platform, offline-first application for a Farmer Producer Company (FPO) to manage inventory, sales, procurement, and billing.
-
-The user has provided a detailed list of required fixes and enhancements after a deployment attempt:
-
-**1. Procurement Tab Issues (Admin & Agent)**
-*   Vendor and Product search is not working.
-*   Stock is not reflecting in the target outlet after procurement.
-
-**2. Stock Tab Improvements**
-*   Add search for both outlets and products.
-
-**3. Reports Section**
-*   The overall report section is not functioning correctly.
-
-**4. Agent Login – Procurement & Sales**
-*   The procurement section is not working properly.
-*   Sales section: Add an optional mobile number field.
-*   Sales section: Add product search when selling.
-*   Procurement/Sales should automatically update stock in the respective outlets.
-
-**5. Stock Movement (Agent Login)**
-*   Stock movement requests need to be clearer (IN vs. OUT, From/To outlets).
-
-**6. Farmer Login Issues**
-*   Buy/Sale request functionality is not working properly.
-*   Select Outlet is not working.
-*   Farmers need to be able to search outlets and products for requests.
-*   Farmers need a consolidated transaction report (downloadable to Excel).
-*   Agents need to be able to view transaction reports for themselves and for any searched farmer.
-
-**7. Shareholder Registration & Upgrade**
-*   Signup form is missing an option to claim shareholder status (upload certificate, enter Folio Number).
-*   Farmer profile should reflect shareholder status.
-*   During transactions, the system should identify shareholders to apply benefits.
-*   Farmers should be able to upgrade their status from their profile (upload cert, enter folio).
-*   Admins should also be able to upgrade a farmer to shareholder status.
-
+<analysis><original_problem_statement>
+This request is to **enhance an already LIVE production application**. 
+**Critical Instruction:** Do NOT rebuild or reinitialize the application. Do NOT delete, overwrite, or reset existing data. Preserve all current users, transactions, inventory, and records.
+**PRODUCT REQUIREMENTS:**
+1. Application Renaming: FPO Business Transaction.
+2. Multi-Enterprise Architecture + Super Admin.
+3. Enterprise Profile (Editable & Bill-Linked).
+4. GST-Compliant Billing Enhancement (Add CGST/SGST % to products/invoices).
+5. Inventory Enhancement (GST integration).
+6. Dashboard Drill-Down Capability.
+7. Global Search Fix (Critical bug: robust, unified search across all modules).
+8. Customer Ledger (Khata System Enhancement).
+9. Purchase Module Enhancement (Vendor selection, central inventory fallback).
+10. Reports Module (Excel/CSV export).
+11. UI/UX Compatibility Fix (Bottom nav conflicts with Android buttons).
+12. Transaction Deletion with Auto-Reversal (Admin-controlled, 30 days limit).
 </original_problem_statement>
 
 **User's preferred language**: English
+(INSTRUCT NEXT AGENT: Automatically detect the user's primary language from their messages inside the <trajectory> tag and respond in the user's preferred language only)
 
-**what currently exists?**
-A full-stack Expo (React Native) and FastAPI application. A significant amount of work was done in this session to stabilize the application and begin addressing a large list of user-provided feedback.
+**what currently exists?** 
+A live production app with an Expo/React Native frontend and a FastAPI/MongoDB backend. Extensive updates were made in this session including renaming the app, building a robust Customer/Vendor Ledger (Khata) system, implementing mandatory selection flows for Sales and Purchases, adding transaction deletion with 30-day auto-reversal, and creating an Outlet Ledger system for agent cash tracking. Deployment bugs (missing  endpoint and bad ) were also fixed.
 
-Key achievements:
-- **Web Login Fixed:** A critical issue preventing login on the web preview was resolved by replacing  with the more web-compatible  component. The app is now fully navigable on the web preview.
-- **Deployment Blockers Resolved:** Several issues preventing deployment were fixed:
-    - Backend N+1 query performance issues were resolved by batching DB calls.
-    - Backend serialization errors with MongoDB's  were fixed.
-    - The  file was cleaned of unnecessary packages.
-    - A corrupted file () and incorrect icon dimensions were fixed.
-- **Core Feature Fixes (Phase 1):**
-    - The backend now correctly updates stock levels when a procurement from a farmer is recorded.
-    - The agent's sales screen has been enhanced with an optional mobile number field and a product search bar.
-    - Search functionality was added to the admin stock screen.
-- **UX Improvements (Phase 2):**
-    - Farmer Buy/Sell request screen was improved with outlet search. The underlying API was verified to be working correctly.
-    - Agent stock transfer view was enhanced with clear IN / OUT badges for better clarity.
-
-**Last working item**:
-    - Last item agent was working: Implementing **Phase 3: Shareholder Registration & Upgrade**. The agent was in the middle of this task. It updated the backend models (, ) and endpoints to include  and . It then created a new version of the farmer settings screen () to include an upgrade form. The next step was to work on the admin side of this feature.
+**Last working item**: 
+    - Last item agent was working: Rearranging the billing system UI in . The user requested moving Customer Details to the top (showing outstanding dues for existing customers), followed by Items, Discount, and Payment Mode. For new customers, the village field is being replaced with a Shareholder checkbox and Shareholder ID field.
     - Status: IN PROGRESS
     - Agent Testing Done: N
-    - Which testing method agent to use? both
+    - Which testing method agent to use? both (Frontend screenshot tool for UI verification, Backend for new customer creation logic).
     - User Testing Done: N
 
 **All Pending/In progress Issue list**:
-- **Issue 1: Application Not Running on Expo Go / APK (P0)**
-- **Issue 2: Procurement Search and Stock Update Verification (P1)**
-- **Issue 3: Farmer/Agent Transaction Reports (P2)**
+  - Issue 1: Application Not Running on Expo Go / APK / Device Verification (P0)
+     - Attempted fixes: Previous fork tried native build and failed.
+     - Next debug checklist: Do NOT try to build a native APK in this environment. Use  to test via Expo Go QR code simulation. Verify navigation and safe areas on the simulated device.
+     - Why fix this issue and what will be achieved with the fix? It is a mobile app; without device verification, functionality on real devices remains unconfirmed.
+     - Status: NOT STARTED
+     - Is recurring issue? Y
+     - Should Test frontend/backend/both after fix? frontend
+     - Blocked on other issue: None
 
-**Issues Detail**:
-  - **Issue 1: Application Not Running on Expo Go / APK (P0)**
-     - **Description:** The most critical issue from the previous fork remains unresolved. All work in this session was verified on the web preview. The agent attempted to build an APK but failed due to environment limitations (missing native compilers). The application has **NEVER been verified on an actual device or APK build**. This is the highest priority risk.
-     - **Attempted fixes:** Agent tried - Making sure project is set up correctly...
-- Making sure project is set up correctly...
-- Making sure project is set up correctly...
-- Making sure project is set up correctly... which failed. The agent correctly identified this is an environment issue.
-     - **Next debug checklist:**
-        1.  Do NOT try to build a native APK again in this environment.
-        2.  Use the  to test the application via the Expo Go QR code simulation.
-        3.  Thoroughly test the login flow (the original P0 bug) and navigation on the simulated device.
-        4.  Verify all newly implemented features on the simulated device.
-     - **Why fix this issue and what will be achieved with the fix?**: The app is intended for mobile use. Without device verification, the entire application's functionality is at risk.
-     - **Status**:  NOT STARTED
-     - **Is recurring issue?** Y
-     - **Should Test frontend/backend/both after fix?** frontend
-     - **Blocked on other issue**: None
+  - Issue 2: Global Search Fix across all modules (P1)
+     - Attempted fixes: None in this session.
+     - Next debug checklist: Review search queries in  for customers, vendors, products, and outlets. Ensure they support partial matching (regex), case-insensitivity, and are indexed properly.
+     - Why fix this issue and what will be achieved with the fix? Critical usability fix requested by the user.
+     - Status: NOT STARTED
+     - Is recurring issue? N
+     - Should Test frontend/backend/both after fix? both
+     - Blocked on other issue: None
 
-  - **Issue 2: Procurement Search and Stock Update Verification (P1)**
-     - **Description:** The user reported that search in the Procurement tab (for vendors and products) is not working, and stock is not updating correctly. The agent fixed the backend stock update for *farmer* procurement but did not explicitly verify the vendor procurement flow or the frontend search functionality end-to-end.
-     - **Attempted fixes:** Backend logic for farmer procurement stock updates was added.
-     - **Next debug checklist:**
-        1.  Go to the Admin or Agent procurement screen.
-        2.  Test the Select Vendor and Select Product search fields to see if they filter the lists.
-        3.  If search fails, debug the  and  logic in  and .
-        4.  Create a new procurement (both from a farmer and a vendor).
-        5.  Navigate to the Stock tab and verify that the stock for the procured product in the correct outlet has increased.
-     - **Why fix this issue and what will be achieved with the fix?**: Procurement is a core function. Broken search and unreliable stock updates make it unusable.
-     - **Status**:  IN PROGRESS
-     - **Is recurring issue?** N
-     - **Should Test frontend/backend/both after fix?** both
-     - **Blocked on other issue**: None
-
-  - **Issue 3: Farmer/Agent Transaction Reports (P2)**
-     - **Description:** User requested consolidated transaction reports for farmers (downloadable) and the ability for agents to see reports for themselves or specific farmers. This has not been implemented.
-     - **Attempted fixes:** None.
-     - **Next debug checklist:**
-        1.  Create new backend endpoints (e.g., ) to aggregate all sales and procurement data for a given farmer.
-        2.  Create an endpoint for agent transaction history.
-        3.  Add a new UI section in the Farmer's login (perhaps in settings or a new tab) to display this report and a Download Excel button.
-        4.  Enhance the Agent's report section to allow searching for a farmer and viewing their transaction history.
-     - **Why fix this issue and what will be achieved with the fix?**: Provides critical financial visibility for both farmers and agents.
-     - **Status**:  NOT STARTED
-     - **Is recurring issue?** N
-     - **Should Test frontend/backend/both after fix?** both
-     - **Blocked on other issue**: None
+  - Issue 3: UI/UX Bottom navigation conflict (P1)
+     - Attempted fixes: None.
+     - Next debug checklist: Reposition critical navigation. Consider using a side drawer or top navigation, or ensure safe area insets are properly applied to the bottom tab bar.
+     - Why fix this issue and what will be achieved with the fix? Prevents conflict with Android system buttons.
+     - Status: NOT STARTED
+     - Is recurring issue? N
+     - Should Test frontend/backend/both after fix? frontend
+     - Blocked on other issue: None
 
 **In progress Task List**:
-  - **Task 1: Complete Shareholder Registration & Upgrade Flow (P0)**
-     - **Where to resume**: The agent just overwrote  to add an upgrade form.
-        1.  Review the new  to ensure the UI is correct and the API call to request an upgrade is implemented.
-        2.  Update the main signup form in  to include a Claim Shareholder checkbox and input for Folio Number.
-        3.  Update the admin shareholder approval screen  to display the folio number and share value.
-        4.  Implement functionality for an admin to directly upgrade a farmer to a shareholder.
-        5.  Update the Sales and Procurement screens to visually indicate when a transacting farmer is a shareholder.
-     - **What will be achieved with this?**: Fulfills a key business requirement for managing FPO members and applying benefits.
-     - **Status**: IN PROGRESS
-     - **Should Test frontend/backend/both after fix?** both
-     - **Blocked on something**: None
+  - Task 1: Rearrange Billing System UI & Add Shareholder fields to Sales Flow (P0)
+     - Where to resume: The agent was mid-way through editing  (around line 640) to reorder the JSX structure (Customer selection -> Product selection -> Discount -> Payment) and replacing village with is_shareholder / folio_number for the New Customer form.
+     - What will be achieved with this? Improves sales UX and allows assigning shareholder status at the point of sale.
+     - Status: IN PROGRESS
+     - Should Test frontend/backend/both after fix? frontend (UI structure) & backend (verifying API payloads).
+     - Blocked on something: None. Must mirror these UI changes to  once done.
 
 **Upcoming and Future Tasks**
-**Upcoming Tasks:**
-- **P1 - Stock Movement Definition:** The user requested clearer definitions for stock movements. While the agent added IN/OUT badges, the request creation flow should also be reviewed for clarity.
-- **P2 - Fix Select Outlet on Farmer Request:** The user reported Select Outlet is not working on the farmer request screen. The agent added search but needs to verify the selection mechanism itself is functional end-to-end.
-
-**Future Tasks:**
-- **P3 - General UX Polish:** The agent noted that tabs were partially cut off on the web preview. A general review of the layout and navigation on different screen sizes would be beneficial.
+    Upcoming Tasks:
+    - Task 2: GST-Compliant Billing & Inventory Enhancement (P1) - Add GST applicable flag, CGST %, SGST % to product schema and auto-calculate in invoices.
+    - Task 3: Multi-Enterprise Architecture + Super Admin (P1) - Create super admin role to manage multiple enterprises (FPO, BRC).
+    - Task 4: Enterprise Profile (Editable & Bill-Linked) (P1) - Mandatory/Optional fields for enterprise info that auto-reflect in future invoices.
+    - Task 5: Dashboard Drill-Down Capability (P2) - Clicking KPIs should navigate to filtered transaction views.
+    - Task 6: Reports Export to Excel (.xlsx) / CSV (P2) - Complete export features for sales, purchase, and customer ledgers.
+    - Task 7: Apply the rearranged billing UI to the Agent Sales Screen (P0).
+    
+    Future Tasks:
+    - Phase 3: Shareholder Registration & Upgrade Flow (P2) - (Carried over from prior fork) Finish the admin approval screen for shareholder upgrades.
 
 **Completed work in this session**
-- **Web Preview Login (DONE):** Fixed the login button on the web by replacing  with  in .
-- **Backend Deployment Readiness (DONE):**
-  - Fixed N+1 query issues in  for sales and stock reports.
-  - Fixed JSON serialization errors for  in .
-  - Cleaned up  to remove unused packages.
-  - Cleaned up  to allow  files for deployment.
-- **Build Artifacts (DONE):**
-  - Removed a corrupted file from .
-  - Resized app icons in  to be square.
-- **Feature Implementation & Fixes (DONE):**
-  - **Stock Update on Procurement:** Fixed  to ensure stock is updated when purchasing from farmers.
-  - **Agent Sales UI:** Added product search and an optional mobile number field to .
-  - **Admin Stock UI:** Added product search to .
-  - **Farmer Request UI:** Added outlet search to .
-  - **Stock Movement Clarity:** Added IN and OUT badges to stock transfer items in .
+- App Renaming & Localization -> FPO Business Transaction (DONE)
+- Deployment Fixes -> Added  endpoint, fixed  blocking  files (DONE)
+- Customer Ledger (Khata) Backend + Frontend Admin UI (DONE)
+- Mandatory Customer Selection & Auto-Ledger Creation in Admin Sales (DONE)
+- Mandatory Vendor Selection & Auto-Ledger Creation in Admin Purchases (DONE)
+- Transaction Deletion with Auto-Reversal -> Admin-only, 30-day limit, auto-restores stock and ledger (DONE)
+- Agent Sales -> Added Mandatory Customer Selection flow (DONE)
+- Outlet Ledger API -> Tracking agent cash deposits and dues per outlet (DONE)
 
 **Earlier issues found/mentioned but not fixed**
-   - **Issue 1: APK Build and Device Testing**
-      - **Debug checklist:** Use  to test on a simulated device. Do not attempt a native build.
-      - **Why to solve this issue and what will be achieved with this?**: It is the original P0 issue and the primary goal of the application is to be a mobile app. Without this, the project is a failure.
-      - **Should Test frontend/backend/both after fix**: frontend
-      - **Is recurring issue?** Y
+   - Issue 1: Application not verified on device / APK
+     - Debug checklist: Test using expo_frontend_testing_agent
+     - Why to solve this issue and what will be achieved with this? Core deliverable is a mobile app. 
+     - Should Test frontend/backend/both after fix: frontend
+     - Is recurring issue? Y
 
 **Known issue recurrence from previous fork**
-  - **Issue recurrence in previous fork**: The application not running on Expo Go / APK.
-  - **Recurrence count**: High
-  - **Status**: NOT STARTED
+  - Issue recurrence in previous fork: Application not running on Expo Go / APK testing missing.
+  - Recurrence count: High
+  - Status: NOT STARTED
 
 **Code Architecture**
-
+/health
 
 **Key Technical Concepts**
-- **Frontend**: React Native, Expo, TypeScript, Expo Router, Zustand
-- **Backend**: FastAPI (Python), MongoDB
-- **API Client**: Axios
-- **Component Library**: Primarily custom components, with a key change from  to .
+- **Frontend**: React Native, Expo, TypeScript, Expo Router, React Navigation
+- **Backend**: FastAPI (Python), MongoDB (Motor)
+- **State/Navigation**: Context/Zustand, File-based routing via 
+- **Critical Flow Logic**: Any purchase or sale *must* be tied to a vendor/customer ID (mandatory selection flow) to maintain accurate Khata (Ledgers). Deletion triggers auto-reversal of stock and ledgers.
 
 **key DB schema**
-- **farmers**:
-  - : Optional[str] (NEW)
-  - : Optional[float] (NEW)
-- **shareholder_upgrades**:
-  - : Optional[str] (NEW)
-  - : Optional[float] (NEW)
-- **sales**:
-  - : Optional[str] (NEW)
+  - **customers**: {id, name, mobile, address, village, outstanding_balance, transaction_count, last_transaction_date}
+  - **vendors**: {id, name, mobile, address, village, outstanding_dues, transaction_count, last_transaction_date}
+  - **sales**: {..., is_deleted, deleted_at, deleted_by, deletion_reason}
+  - **outlet_cash_deposits**: {deposit_id, outlet_id, amount, status, date, deposited_by}
 
 **changes in tech stack**
-  - None.
+  - None
 
-**All files of reference**
-- : **Recently overwritten**. Contains new UI for shareholder upgrade requests.
-- : Heavily modified to fix bugs, performance issues, and add new fields for shareholder flow.
-- : Critical fix was made here to enable web login.
-- : Updated with new UI elements for search and mobile number.
-- : Updated with new UI for product search.
-- : Updated with new UI for stock movement clarity.
-- : Updated with new UI for outlet search.
-- : Cleaned for faster deployment.
-- : Cleaned for proper deployment.
+**All files of reference** 
+-  (Massive updates for ledgers, outlets, deletion endpoints)
+-  (CURRENTLY BEING EDITED - Reordering UI components)
+-  (Newly created for tracking customer ledgers)
+-  (Updated to stop ignoring  files for deployment)
+-  (App labels and localizations added)
 
 **Areas that need refactoring**:
-- The user feedback implies that the search logic in the procurement screens ( for admin and agent) is either broken or not implemented as expected, despite some search-related code being present. This needs investigation and potentially a refactor.
+-  and  are getting very large. Reusable components (like the Customer Selection component) should ideally be abstracted out.
 
 **key api endpoints**
--  (POST): Modified to update stock.
--  (POST): Logic updated to handle manual entries.
--  (POST): Model updated to accept .
--  (POST, PUT): Models and logic updated to handle  and .
-- , : Endpoints verified as working; were previously broken due to serialization issues.
+-  (Deployment health check)
+- , 
+-  (Agent cash tracking)
+-  (Transaction reversal)
 
 **Critical Info for New Agent**
-1.  **Resume Phase 3 (Shareholder Flow):** Your immediate task is to complete the Shareholder feature. Review , then implement the corresponding changes on the signup form () and the admin approval screen ().
-2.  **Address User Feedback Systematically:** After Phase 3, follow the All Pending/In progress Issue list and Upcoming and Future Tasks derived from the user's detailed feedback (message 189). The next most critical item is verifying the procurement search and stock updates.
-3.  **DO NOT DEPLOY YET:** The app is likely still not ready for deployment. The original P0 issue of the app not being tested on a device/APK is still outstanding. This MUST be done before another deployment attempt. Use the  to perform this verification.
+1. **Resume the exact task**: The user requested a UI rearrangement in the billing system: *Customer Details at top -> Items -> Discount -> Payment Mode*. Also, for *new customers*, add a Shareholder checkbox and ID instead of village. You must resume the  operation on  that the last agent started.
+2. **Replicate to Agent**: Once the Admin sales UI is successfully rearranged, you MUST apply the exact same visual structure to .
+3. **DO NOT OVERWRITE DATA**: The user explicitly stated this is a live production app. Maintain backward compatibility in database documents and do not rebuild/wipe the data. Use safe schema evolution.
+4. **Missing peer dependency note**: Keep an eye out for  conflicts if you touch . The previous agent handled a  web error by letting  manage dependencies.
 
-**documents created in this job**
-- None.
+**documents and test reports created in this job**
+  -  (Updated with completion notes for Ledger and Deletion features).
 
-**Last 10 User Messages and any pending HUMAN messages**
-- **10. (latest)**  - User approved work on shareholder features. **Status: In Progress.**
-- **9.** Agent: Summarized Phase 2 completion and asked to proceed with Phase 3. **Status: Addressed.**
-- **8.**  - User approved work on farmer requests/stock movement. **Status: Completed.**
-- **7.** Agent: Summarized Phase 1 completion and asked to proceed with Phase 2. **Status: Addressed.**
-- **6.**  - User gave green light to continue with Phase 1 fixes. **Status: Completed.**
-- **5.** Agent: Summarized partial completion of Phase 1 and asked to continue. **Status: Addressed.**
-- **4.** User:  - Initial go-ahead after agent's plan. **Status: In Progress.**
-- **3.** Agent: Proposed a plan to tackle critical APK issues. **Status: Addressed.**
-- **2.** User: Provided a massive list of bugs and feature requests. **Status: Partially Addressed, work ongoing.**
-- **1.** User: Requested deployment and provided multiple sets of deployment error logs. **Status: Addressed, deployment issues fixed but deployment itself is on hold.**
+**Last 10 User Messages and any pending HUMAN messages** 
+ - 10. (latest)  - **Status: IN PROGRESS**
+ - 9.  - **Status: COMPLETED**
+ - 8.  - **Status: COMPLETED**
+ - 7.  - **Status: COMPLETED**
+ - 6.  - **Status: COMPLETED**
+ - 5.  - **Status: COMPLETED**
+ - 4.  - **Status: COMPLETED**
+ - 3.  - **Status: ADDRESSED**
+ - 2.  (Huge feature list) - **Status: PARTIALLY ADDRESSED, WORK ONGOING**
+ - 1.  - **Status: PAUSED** (Superseded by user's massive production enhancement list)
 
 **Project Health Check:**
-- **Broken**:
-    - **APK/Device Functionality**: The application's stability and functionality on a real device or emulator is **completely unknown**. It was reported as broken in the initial state and has not been tested since. This is a critical failure point.
-- **Mocked**:
-    - None.
+- Broken: None blocking right now.
+- Mocked: None.
 
 **3rd Party Integrations**
-- **xlsx (SheetJS):** Used for generating Excel reports.
-- **Expo Print & Sharing:** Used for generating and sharing PDF bills.
+- No emergent LLM keys or API keys currently utilized/required.
 
 **Testing status**
-  - Testing agent used after significant changes: YES (backend endpoints were tested via curl scripts after major changes).
-  - Troubleshoot agent used after agent stuck in loop: NO
-  - Test files created: None.
-  - Known regressions: None identified. The app is significantly more stable on the web preview than at the start of the session.
+  - Testing agent used after significant changes: YES (backend bash scripts were heavily used)
+  - Troubleshoot agent used after agent stuck in loop: NO (Deployment agent was used for Kubernetes 404 error)
+  - Test files created: None
+  - Known regressions: None
 
 **Credentials to test flow:**
-- **Admin Username**:  / **Password**: 
-- **Farmer Username**:  / **Password**: 
+- Admin Username:  / Password: 
+- Farmer Username:  / Password: 
 
 **What agent forgot to execute**
-- The single most important task the agent did not complete was **verifying the application on a device or APK build**. It got sidetracked by fixing web preview issues and then by the large user feedback list. The original P0 issue that prompted this entire fork—that the app doesn't run on a device—remains unresolved and unverified.
-
-</analysis>
+- The agent was in the middle of restructuring the JSX block in  to move the customer selection block above the item selection block. It updated the states but failed to finish replacing the UI structure before the turn ended.
+- Testing on the Expo Go device/APK simulator.
+- Refactoring  to match the newly requested UI layout.</analysis>

@@ -80,3 +80,12 @@ android-sdk/
 
 # Note: .env files are NOT ignored - they are required for Emergent deployment
 # The deployment system needs these files to configure the application
+-e 
+# Environment and credential files
+.env
+.env.*
+*.env
+credentials.json
+*.pem
+*.key
+.credentials

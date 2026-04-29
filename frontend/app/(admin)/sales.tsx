@@ -103,7 +103,8 @@ export default function SalesScreen() {
     name: '',
     mobile: '',
     address: '',
-    village: '',
+    is_shareholder: false,
+    folio_number: '',
   });
   const [creatingCustomer, setCreatingCustomer] = useState(false);
   const [confirmedCustomer, setConfirmedCustomer] = useState<Customer | null>(null);
@@ -177,14 +178,20 @@ export default function SalesScreen() {
       return;
     }
 
+    // Validate shareholder folio number if shareholder is checked
+    if (newCustomerData.is_shareholder && !newCustomerData.folio_number.trim()) {
+      Alert.alert(t('error'), language === 'hi' ? 'शेयरधारक पहचान संख्या आवश्यक है' : 'Shareholder ID number is required');
+      return;
+    }
+
     setCreatingCustomer(true);
     try {
       const response = await api.post('/customers', {
         name: newCustomerData.name.trim(),
         mobile: newCustomerData.mobile.trim() || null,
         address: newCustomerData.address.trim() || null,
-        village: newCustomerData.village.trim() || null,
-        customer_type: 'registered',
+        customer_type: newCustomerData.is_shareholder ? 'shareholder' : 'registered',
+        folio_number: newCustomerData.is_shareholder ? newCustomerData.folio_number.trim() : null,
       });
       
       const newCustomer: Customer = response.data;
@@ -287,7 +294,7 @@ export default function SalesScreen() {
     setConfirmedCustomer(null);
     setCustomerSearch('');
     setSearchResults([]);
-    setNewCustomerData({ name: '', mobile: '', address: '', village: '' });
+    setNewCustomerData({ name: '', mobile: '', address: '', is_shareholder: false, folio_number: '' });
   };
 
   const handleCreateSale = async () => {
@@ -764,12 +771,39 @@ export default function SalesScreen() {
                       value={newCustomerData.address}
                       onChangeText={(val) => setNewCustomerData({ ...newCustomerData, address: val })}
                     />
-                    <Input
-                      label={t('village')}
-                      placeholder={language === 'hi' ? 'गाँव का नाम' : 'Village name'}
-                      value={newCustomerData.village}
-                      onChangeText={(val) => setNewCustomerData({ ...newCustomerData, village: val })}
-                    />
+                    
+                    {/* Shareholder Checkbox */}
+                    <TouchableOpacity 
+                      style={styles.shareholderCheckbox}
+                      onPress={() => setNewCustomerData({ 
+                        ...newCustomerData, 
+                        is_shareholder: !newCustomerData.is_shareholder,
+                        folio_number: !newCustomerData.is_shareholder ? newCustomerData.folio_number : ''
+                      })}
+                    >
+                      <View style={[
+                        styles.checkbox,
+                        newCustomerData.is_shareholder && styles.checkboxChecked
+                      ]}>
+                        {newCustomerData.is_shareholder && (
+                          <Ionicons name="checkmark" size={16} color="#FFF" />
+                        )}
+                      </View>
+                      <Text style={styles.shareholderLabel}>
+                        {language === 'hi' ? 'शेयरधारक (FPO सदस्य)' : 'Shareholder (FPO Member)'}
+                      </Text>
+                    </TouchableOpacity>
+
+                    {/* Shareholder ID Number - only visible if shareholder is checked */}
+                    {newCustomerData.is_shareholder && (
+                      <Input
+                        label={language === 'hi' ? 'शेयरधारक पहचान संख्या *' : 'Shareholder ID Number *'}
+                        placeholder={language === 'hi' ? 'फोलियो/पहचान नंबर दर्ज करें' : 'Enter folio/ID number'}
+                        value={newCustomerData.folio_number}
+                        onChangeText={(val) => setNewCustomerData({ ...newCustomerData, folio_number: val })}
+                      />
+                    )}
+
                     <Button
                       title={language === 'hi' ? 'ग्राहक जोड़ें और खाता बनाएं' : 'Add Customer & Create Khata'}
                       onPress={handleCreateNewCustomer}
