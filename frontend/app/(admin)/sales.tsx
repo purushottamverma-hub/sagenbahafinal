@@ -21,6 +21,7 @@ import { useAuthStore } from '../../src/store/authStore';
 import { useSettingsStore } from '../../src/store/settingsStore';
 import api from '../../src/utils/api';
 import { printBill, shareBillAsPDF } from '../../src/utils/billGenerator';
+import { router } from 'expo-router';
 
 interface ProductVariety {
   id?: string;
@@ -45,6 +46,7 @@ interface Outlet {
 interface Customer {
   id: string;
   name: string;
+  name_hi?: string;
   mobile?: string;
   address?: string;
   village?: string;
@@ -111,6 +113,7 @@ export default function SalesScreen() {
   const [searchingCustomers, setSearchingCustomers] = useState(false);
   const [newCustomerData, setNewCustomerData] = useState({
     name: '',
+    name_hi: '',
     mobile: '',
     address: '',
     is_shareholder: false,
@@ -241,6 +244,7 @@ export default function SalesScreen() {
     try {
       const response = await api.post('/customers', {
         name: newCustomerData.name.trim(),
+        name_hi: newCustomerData.name_hi.trim() || null,
         mobile: newCustomerData.mobile.trim() || null,
         address: newCustomerData.address.trim() || null,
         customer_type: newCustomerData.is_shareholder ? 'shareholder' : 'registered',
@@ -285,7 +289,7 @@ export default function SalesScreen() {
     setCustomerName('');
     setCustomerSearch('');
     setSearchResults([]);
-    setNewCustomerData({ name: '', mobile: '', address: '', is_shareholder: false, folio_number: '' });
+    setNewCustomerData({ name: '', name_hi: '', mobile: '', address: '', is_shareholder: false, folio_number: '' });
   };
 
   const formatCurrency = (amount: number) => `${t('currency')}${amount.toLocaleString('en-IN')}`;
@@ -755,10 +759,16 @@ export default function SalesScreen() {
                   </Text>
                 </View>
                 <Input
-                  label={`${t('customerName')} *`}
-                  placeholder={language === 'hi' ? 'ग्राहक का नाम दर्ज करें' : 'Enter customer name'}
+                  label={`${t('customerName')} (English) *`}
+                  placeholder={language === 'hi' ? 'अंग्रेजी में नाम दर्ज करें' : 'Enter name in English'}
                   value={newCustomerData.name}
                   onChangeText={(val) => setNewCustomerData({ ...newCustomerData, name: val })}
+                />
+                <Input
+                  label={language === 'hi' ? 'नाम (हिंदी)' : 'Name (Hindi)'}
+                  placeholder={language === 'hi' ? 'हिंदी में नाम दर्ज करें' : 'नाम हिंदी में'}
+                  value={newCustomerData.name_hi}
+                  onChangeText={(val) => setNewCustomerData({ ...newCustomerData, name_hi: val })}
                 />
                 <Input
                   label={t('mobile')}
@@ -848,28 +858,57 @@ export default function SalesScreen() {
                       {language === 'hi' ? 'परिणाम:' : 'Results:'}
                     </Text>
                     {searchResults.map(customer => (
-                      <TouchableOpacity
-                        key={customer.id}
-                        style={styles.searchResultItem}
-                        onPress={() => handleSelectExistingCustomer(customer)}
-                      >
-                        <View style={styles.searchResultInfo}>
-                          <Text style={styles.searchResultName}>{customer.name}</Text>
-                          {customer.mobile && (
+                      <View key={customer.id} style={styles.searchResultItem}>
+                        <TouchableOpacity
+                          style={styles.searchResultInfo}
+                          onPress={() => handleSelectExistingCustomer(customer)}
+                        >
+                          <Text style={styles.searchResultName}>
+                            {customer.name}
+                            {customer.name_hi ? (
+                              <Text style={styles.searchResultNameHi}>  ({customer.name_hi})</Text>
+                            ) : null}
+                          </Text>
+                          {customer.mobile ? (
                             <Text style={styles.searchResultMobile}>
                               <Ionicons name="call-outline" size={12} color="#666" /> {customer.mobile}
                             </Text>
-                          )}
-                          {customer.outstanding_balance > 0 && (
-                            <Text style={styles.searchResultDue}>
-                              <Ionicons name="wallet-outline" size={12} color="#E65100" /> {language === 'hi' ? 'बकाया:' : 'Due:'} {formatCurrency(customer.outstanding_balance)}
+                          ) : null}
+                          {(customer.address || customer.village) ? (
+                            <Text style={styles.searchResultAddress}>
+                              <Ionicons name="location-outline" size={12} color="#666" /> {customer.address || customer.village}
+                            </Text>
+                          ) : null}
+                          {customer.outstanding_balance > 0 ? (
+                            <TouchableOpacity
+                              onPress={() => {
+                                setShowNewSale(false);
+                                setTimeout(() => router.push(`/(admin)/khata?customerId=${customer.id}` as any), 200);
+                              }}
+                              style={styles.dueLinkRow}
+                            >
+                              <Ionicons name="wallet" size={14} color="#D32F2F" />
+                              <Text style={styles.dueLinkText}>
+                                {language === 'hi' ? 'बकाया:' : 'Due:'} {formatCurrency(customer.outstanding_balance)}
+                              </Text>
+                              <Ionicons name="open-outline" size={12} color="#D32F2F" />
+                              <Text style={styles.dueLinkHint}>
+                                {language === 'hi' ? 'खाता देखें' : 'View Khata'}
+                              </Text>
+                            </TouchableOpacity>
+                          ) : (
+                            <Text style={styles.noDueInline}>
+                              {language === 'hi' ? '✓ कोई बकाया नहीं' : '✓ No dues'}
                             </Text>
                           )}
-                        </View>
-                        <View style={styles.searchResultAction}>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          onPress={() => handleSelectExistingCustomer(customer)}
+                          style={styles.searchResultAction}
+                        >
                           <Ionicons name="chevron-forward" size={20} color="#2E7D32" />
-                        </View>
-                      </TouchableOpacity>
+                        </TouchableOpacity>
+                      </View>
                     ))}
                   </View>
                 )}
@@ -899,19 +938,39 @@ export default function SalesScreen() {
                 <View style={styles.confirmedCustomerInfo}>
                   <Ionicons name="checkmark-circle" size={24} color="#2E7D32" />
                   <View style={styles.confirmedCustomerDetails}>
-                    <Text style={styles.confirmedCustomerName}>{confirmedCustomer.name}</Text>
-                    {confirmedCustomer.mobile && (
+                    <Text style={styles.confirmedCustomerName}>
+                      {confirmedCustomer.name}
+                      {confirmedCustomer.name_hi ? (
+                        <Text style={styles.searchResultNameHi}>  ({confirmedCustomer.name_hi})</Text>
+                      ) : null}
+                    </Text>
+                    {confirmedCustomer.mobile ? (
                       <Text style={styles.confirmedCustomerMobile}>
                         <Ionicons name="call-outline" size={12} color="#666" /> {confirmedCustomer.mobile}
                       </Text>
-                    )}
+                    ) : null}
+                    {(confirmedCustomer.address || confirmedCustomer.village) ? (
+                      <Text style={styles.searchResultAddress}>
+                        <Ionicons name="location-outline" size={12} color="#666" /> {confirmedCustomer.address || confirmedCustomer.village}
+                      </Text>
+                    ) : null}
                     {confirmedCustomer.outstanding_balance > 0 ? (
-                      <View style={styles.duesBanner}>
-                        <Ionicons name="alert-circle" size={16} color="#D32F2F" />
-                        <Text style={styles.duesBannerText}>
+                      <TouchableOpacity
+                        onPress={() => {
+                          setShowNewSale(false);
+                          setTimeout(() => router.push(`/(admin)/khata?customerId=${confirmedCustomer.id}` as any), 200);
+                        }}
+                        style={styles.dueLinkRow}
+                      >
+                        <Ionicons name="wallet" size={14} color="#D32F2F" />
+                        <Text style={styles.dueLinkText}>
                           {language === 'hi' ? 'पिछला बकाया:' : 'Outstanding Due:'} {formatCurrency(confirmedCustomer.outstanding_balance)}
                         </Text>
-                      </View>
+                        <Ionicons name="open-outline" size={12} color="#D32F2F" />
+                        <Text style={styles.dueLinkHint}>
+                          {language === 'hi' ? 'खाता देखें' : 'View Khata'}
+                        </Text>
+                      </TouchableOpacity>
                     ) : (
                       <Text style={styles.noDuesText}>
                         {language === 'hi' ? '✓ कोई बकाया नहीं' : '✓ No outstanding dues'}
@@ -2131,4 +2190,45 @@ const styles = StyleSheet.create({
     backgroundColor: '#FAFAFA',
   },
   varietyOptionText: { flex: 1, fontSize: 15, fontWeight: '600', color: '#333' },
+  // Enhanced search result display
+  searchResultNameHi: {
+    fontSize: 14,
+    color: '#666',
+    fontWeight: '400',
+  },
+  searchResultAddress: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 2,
+  },
+  dueLinkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFEBEE',
+    borderRadius: 6,
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    marginTop: 6,
+    gap: 6,
+    alignSelf: 'flex-start',
+  },
+  dueLinkText: {
+    fontSize: 13,
+    color: '#D32F2F',
+    fontWeight: '700',
+  },
+  dueLinkHint: {
+    fontSize: 11,
+    color: '#D32F2F',
+    fontWeight: '600',
+    fontStyle: 'italic',
+    textDecorationLine: 'underline',
+    marginLeft: 2,
+  },
+  noDueInline: {
+    fontSize: 12,
+    color: '#2E7D32',
+    marginTop: 4,
+    fontWeight: '500',
+  },
 });

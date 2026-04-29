@@ -37,6 +37,7 @@ interface Product {
 interface Customer {
   id: string;
   name: string;
+  name_hi?: string;
   mobile?: string;
   address?: string;
   village?: string;
@@ -93,6 +94,7 @@ export default function AgentSalesScreen() {
   const [searchingCustomers, setSearchingCustomers] = useState(false);
   const [newCustomerData, setNewCustomerData] = useState({
     name: '',
+    name_hi: '',
     mobile: '',
     address: '',
     is_shareholder: false,
@@ -213,6 +215,7 @@ export default function AgentSalesScreen() {
     try {
       const response = await api.post('/customers', {
         name: newCustomerData.name.trim(),
+        name_hi: newCustomerData.name_hi.trim() || null,
         mobile: newCustomerData.mobile.trim() || null,
         address: newCustomerData.address.trim() || null,
         customer_type: newCustomerData.is_shareholder ? 'shareholder' : 'registered',
@@ -257,7 +260,7 @@ export default function AgentSalesScreen() {
     setCustomerName('');
     setCustomerSearch('');
     setSearchResults([]);
-    setNewCustomerData({ name: '', mobile: '', address: '', is_shareholder: false, folio_number: '' });
+    setNewCustomerData({ name: '', name_hi: '', mobile: '', address: '', is_shareholder: false, folio_number: '' });
   };
 
   const formatCurrency = (amount: number) => `${t('currency')}${amount.toLocaleString('en-IN')}`;
@@ -340,7 +343,7 @@ export default function AgentSalesScreen() {
     setConfirmedCustomer(null);
     setCustomerSearch('');
     setSearchResults([]);
-    setNewCustomerData({ name: '', mobile: '', address: '', is_shareholder: false, folio_number: '' });
+    setNewCustomerData({ name: '', name_hi: '', mobile: '', address: '', is_shareholder: false, folio_number: '' });
   };
 
   const handleCreateSale = async () => {
@@ -545,10 +548,16 @@ export default function AgentSalesScreen() {
                   </Text>
                 </View>
                 <Input
-                  label={`${t('customerName')} *`}
-                  placeholder={language === 'hi' ? 'ग्राहक का नाम दर्ज करें' : 'Enter customer name'}
+                  label={`${t('customerName')} (English) *`}
+                  placeholder={language === 'hi' ? 'अंग्रेजी में नाम दर्ज करें' : 'Enter name in English'}
                   value={newCustomerData.name}
                   onChangeText={(val) => setNewCustomerData({ ...newCustomerData, name: val })}
+                />
+                <Input
+                  label={language === 'hi' ? 'नाम (हिंदी)' : 'Name (Hindi)'}
+                  placeholder={language === 'hi' ? 'हिंदी में नाम दर्ज करें' : 'नाम हिंदी में'}
+                  value={newCustomerData.name_hi}
+                  onChangeText={(val) => setNewCustomerData({ ...newCustomerData, name_hi: val })}
                 />
                 <Input
                   label={t('mobile')}
@@ -644,15 +653,32 @@ export default function AgentSalesScreen() {
                         onPress={() => handleSelectExistingCustomer(customer)}
                       >
                         <View style={styles.searchResultInfo}>
-                          <Text style={styles.searchResultName}>{customer.name}</Text>
-                          {customer.mobile && (
+                          <Text style={styles.searchResultName}>
+                            {customer.name}
+                            {customer.name_hi ? (
+                              <Text style={{ fontSize: 14, color: '#666', fontWeight: '400' }}>  ({customer.name_hi})</Text>
+                            ) : null}
+                          </Text>
+                          {customer.mobile ? (
                             <Text style={styles.searchResultMobile}>
                               <Ionicons name="call-outline" size={12} color="#666" /> {customer.mobile}
                             </Text>
-                          )}
-                          {customer.outstanding_balance > 0 && (
-                            <Text style={styles.searchResultDue}>
-                              <Ionicons name="wallet-outline" size={12} color="#E65100" /> {language === 'hi' ? 'बकाया:' : 'Due:'} {formatCurrency(customer.outstanding_balance)}
+                          ) : null}
+                          {(customer.address || customer.village) ? (
+                            <Text style={styles.searchResultMobile}>
+                              <Ionicons name="location-outline" size={12} color="#666" /> {customer.address || customer.village}
+                            </Text>
+                          ) : null}
+                          {customer.outstanding_balance > 0 ? (
+                            <View style={styles.dueTagRow}>
+                              <Ionicons name="wallet" size={13} color="#D32F2F" />
+                              <Text style={styles.dueTagText}>
+                                {language === 'hi' ? 'बकाया:' : 'Due:'} {formatCurrency(customer.outstanding_balance)}
+                              </Text>
+                            </View>
+                          ) : (
+                            <Text style={{ fontSize: 12, color: '#2E7D32', marginTop: 4, fontWeight: '500' }}>
+                              {language === 'hi' ? '✓ कोई बकाया नहीं' : '✓ No dues'}
                             </Text>
                           )}
                         </View>
@@ -1464,4 +1490,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#FAFAFA',
   },
   varietyOptionText: { flex: 1, fontSize: 15, fontWeight: '600', color: '#333' },
+  dueTagRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFEBEE',
+    borderRadius: 6,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    marginTop: 6,
+    gap: 6,
+    alignSelf: 'flex-start',
+  },
+  dueTagText: { fontSize: 12, color: '#D32F2F', fontWeight: '700' },
 });

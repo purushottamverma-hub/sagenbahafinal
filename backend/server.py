@@ -230,6 +230,7 @@ class StockTransferRequest(BaseModel):
 
 class CustomerBase(BaseModel):
     name: str
+    name_hi: Optional[str] = None  # Hindi name
     mobile: Optional[str] = None
     address: Optional[str] = None
     village: Optional[str] = None
@@ -1633,6 +1634,7 @@ async def search_customers(
         "is_active": True,
         "$or": [
             {"name": search_regex},
+            {"name_hi": search_regex},
             {"mobile": search_regex},
             {"village": search_regex},
             {"address": search_regex},
@@ -1644,6 +1646,7 @@ async def search_customers(
     return [{
         "id": c["id"],
         "name": c["name"],
+        "name_hi": c.get("name_hi", ""),
         "mobile": c.get("mobile", ""),
         "village": c.get("village", ""),
         "address": c.get("address", ""),
@@ -2618,13 +2621,14 @@ async def global_search(
     customers_raw = await db.customers.find({
         "is_active": True,
         "$or": [
-            {"name": rx}, {"mobile": rx}, {"village": rx},
+            {"name": rx}, {"name_hi": rx}, {"mobile": rx}, {"village": rx},
             {"address": rx}, {"folio_number": rx},
         ]
     }).limit(10).to_list(10)
     customers = [{
         "id": c["id"],
         "name": c.get("name", ""),
+        "name_hi": c.get("name_hi", ""),
         "mobile": c.get("mobile", ""),
         "village": c.get("village", ""),
         "address": c.get("address", ""),

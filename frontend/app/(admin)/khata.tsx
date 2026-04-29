@@ -19,6 +19,7 @@ import { Button } from '../../src/components/Button';
 import { Input } from '../../src/components/Input';
 import { useTranslation } from '../../src/utils/useTranslation';
 import api from '../../src/utils/api';
+import { useLocalSearchParams } from 'expo-router';
 
 interface Customer {
   id: string;
@@ -143,6 +144,18 @@ export default function KhataScreen() {
   useEffect(() => {
     fetchCustomers();
   }, [searchQuery, filterDues]);
+
+  // Deep-link support — auto-open ledger if ?customerId=... is in the URL
+  const params = useLocalSearchParams<{ customerId?: string }>();
+  useEffect(() => {
+    const targetId = params?.customerId;
+    if (!targetId || !customers.length) return;
+    const target = customers.find((c: any) => c.id === targetId);
+    if (target) {
+      openLedger(target as any);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params?.customerId, customers.length]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
