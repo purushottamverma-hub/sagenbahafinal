@@ -86,7 +86,8 @@ export default function AgentSalesScreen() {
     name: '',
     mobile: '',
     address: '',
-    village: '',
+    is_shareholder: false,
+    folio_number: '',
   });
   const [creatingCustomer, setCreatingCustomer] = useState(false);
   const [confirmedCustomer, setConfirmedCustomer] = useState<Customer | null>(null);
@@ -154,14 +155,20 @@ export default function AgentSalesScreen() {
       return;
     }
 
+    // Validate shareholder folio number if shareholder is checked
+    if (newCustomerData.is_shareholder && !newCustomerData.folio_number.trim()) {
+      Alert.alert(t('error'), language === 'hi' ? 'शेयरधारक पहचान संख्या आवश्यक है' : 'Shareholder ID number is required');
+      return;
+    }
+
     setCreatingCustomer(true);
     try {
       const response = await api.post('/customers', {
         name: newCustomerData.name.trim(),
         mobile: newCustomerData.mobile.trim() || null,
         address: newCustomerData.address.trim() || null,
-        village: newCustomerData.village.trim() || null,
-        customer_type: 'registered',
+        customer_type: newCustomerData.is_shareholder ? 'shareholder' : 'registered',
+        folio_number: newCustomerData.is_shareholder ? newCustomerData.folio_number.trim() : null,
       });
       
       const newCustomer: Customer = response.data;
@@ -202,7 +209,7 @@ export default function AgentSalesScreen() {
     setCustomerName('');
     setCustomerSearch('');
     setSearchResults([]);
-    setNewCustomerData({ name: '', mobile: '', address: '', village: '' });
+    setNewCustomerData({ name: '', mobile: '', address: '', is_shareholder: false, folio_number: '' });
   };
 
   const formatCurrency = (amount: number) => `${t('currency')}${amount.toLocaleString('en-IN')}`;
@@ -266,7 +273,7 @@ export default function AgentSalesScreen() {
     setConfirmedCustomer(null);
     setCustomerSearch('');
     setSearchResults([]);
-    setNewCustomerData({ name: '', mobile: '', address: '', village: '' });
+    setNewCustomerData({ name: '', mobile: '', address: '', is_shareholder: false, folio_number: '' });
   };
 
   const handleCreateSale = async () => {
@@ -421,332 +428,371 @@ export default function AgentSalesScreen() {
           </View>
 
           <ScrollView style={styles.modalContent}>
-            {/* Product Search */}
-            <Text style={styles.label}>{t('products')}</Text>
-            <Input
-              placeholder={language === 'hi' ? 'उत्पाद खोजें...' : 'Search products...'}
-              value={productSearch}
-              onChangeText={setProductSearch}
-              containerStyle={{ marginBottom: 10 }}
-            />
-            <View style={styles.productGrid}>
-              {filteredProducts.map(product => (
-                <TouchableOpacity
-                  key={product.id}
-                  style={styles.productChip}
-                  onPress={() => addItem(product)}
-                >
-                  <Text style={styles.productChipText}>
-                    {language === 'hi' && product.name_hi ? product.name_hi : product.name}
+            {/* 1. CUSTOMER DETAILS (at top) */}
+            <Text style={styles.label}>{t('selectCustomer')} *</Text>
+
+            {/* Customer Selection Flow - MANDATORY */}
+            {customerSelectionMode === 'select' && (
+              <View style={styles.customerSelectionContainer}>
+                <Text style={styles.customerSelectionTitle}>
+                  {language === 'hi' ? 'ग्राहक चयन (आवश्यक)' : 'Customer Selection (Required)'}
+                </Text>
+                <View style={styles.customerSelectionOptions}>
+                  <TouchableOpacity
+                    style={styles.customerOptionBtn}
+                    onPress={() => setCustomerSelectionMode('new')}
+                  >
+                    <Ionicons name="person-add" size={28} color="#2E7D32" />
+                    <Text style={styles.customerOptionText}>
+                      {language === 'hi' ? 'नया ग्राहक' : 'New Customer'}
+                    </Text>
+                    <Text style={styles.customerOptionSubtext}>
+                      {language === 'hi' ? 'नया खाता बनाएं' : 'Create new Khata'}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.customerOptionBtn}
+                    onPress={() => setCustomerSelectionMode('existing')}
+                  >
+                    <Ionicons name="search" size={28} color="#1976D2" />
+                    <Text style={styles.customerOptionText}>
+                      {language === 'hi' ? 'मौजूदा ग्राहक' : 'Existing Customer'}
+                    </Text>
+                    <Text style={styles.customerOptionSubtext}>
+                      {language === 'hi' ? 'नाम/मोबाइल से खोजें' : 'Search by name/mobile'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
+            {/* New Customer Form */}
+            {customerSelectionMode === 'new' && (
+              <View style={styles.customerFormContainer}>
+                <View style={styles.customerFormHeader}>
+                  <TouchableOpacity onPress={() => setCustomerSelectionMode('select')}>
+                    <Ionicons name="arrow-back" size={24} color="#333" />
+                  </TouchableOpacity>
+                  <Text style={styles.customerFormTitle}>
+                    {language === 'hi' ? 'नया ग्राहक जोड़ें' : 'Add New Customer'}
                   </Text>
-                  <Text style={styles.productUnit}>({product.unit})</Text>
+                </View>
+                <Input
+                  label={`${t('customerName')} *`}
+                  placeholder={language === 'hi' ? 'ग्राहक का नाम दर्ज करें' : 'Enter customer name'}
+                  value={newCustomerData.name}
+                  onChangeText={(val) => setNewCustomerData({ ...newCustomerData, name: val })}
+                />
+                <Input
+                  label={t('mobile')}
+                  placeholder={language === 'hi' ? 'मोबाइल नंबर' : 'Mobile number'}
+                  value={newCustomerData.mobile}
+                  onChangeText={(val) => setNewCustomerData({ ...newCustomerData, mobile: val })}
+                  keyboardType="phone-pad"
+                />
+                <Input
+                  label={t('address')}
+                  placeholder={language === 'hi' ? 'पता दर्ज करें' : 'Enter address'}
+                  value={newCustomerData.address}
+                  onChangeText={(val) => setNewCustomerData({ ...newCustomerData, address: val })}
+                />
+
+                {/* Shareholder Checkbox */}
+                <TouchableOpacity
+                  style={styles.shareholderCheckbox}
+                  onPress={() => setNewCustomerData({
+                    ...newCustomerData,
+                    is_shareholder: !newCustomerData.is_shareholder,
+                    folio_number: !newCustomerData.is_shareholder ? newCustomerData.folio_number : ''
+                  })}
+                >
+                  <View style={[
+                    styles.checkbox,
+                    newCustomerData.is_shareholder && styles.checkboxChecked
+                  ]}>
+                    {newCustomerData.is_shareholder && (
+                      <Ionicons name="checkmark" size={16} color="#FFF" />
+                    )}
+                  </View>
+                  <Text style={styles.shareholderLabel}>
+                    {language === 'hi' ? 'शेयरधारक (FPO सदस्य)' : 'Shareholder (FPO Member)'}
+                  </Text>
                 </TouchableOpacity>
-              ))}
-            </View>
 
-            {/* Sale Items */}
-            {saleItems.length > 0 && (
-              <View style={styles.itemsSection}>
-                <Text style={styles.label}>{language === 'hi' ? 'आइटम्स' : 'Items'}</Text>
-                {saleItems.map(item => (
-                  <View key={item.product_id} style={styles.itemRow}>
-                    <View style={styles.itemInfo}>
-                      <Text style={styles.itemName}>{item.product_name}</Text>
-                      <TouchableOpacity onPress={() => removeItem(item.product_id)}>
-                        <Ionicons name="trash-outline" size={18} color="#D32F2F" />
-                      </TouchableOpacity>
-                    </View>
-                    <View style={styles.itemInputs}>
-                      <Input
-                        placeholder={t('quantity')}
-                        value={item.quantity.toString()}
-                        onChangeText={(val) => updateItemQty(item.product_id, val)}
-                        keyboardType="decimal-pad"
-                        containerStyle={styles.qtyInput}
-                      />
-                      <Text style={styles.multiply}>×</Text>
-                      <Input
-                        placeholder={t('rate')}
-                        value={item.rate > 0 ? item.rate.toString() : ''}
-                        onChangeText={(val) => updateItemRate(item.product_id, val)}
-                        keyboardType="decimal-pad"
-                        containerStyle={styles.rateInput}
-                      />
-                      <Text style={styles.equals}>=</Text>
-                      <Text style={styles.itemAmount}>{formatCurrency(item.amount)}</Text>
-                    </View>
-                  </View>
-                ))}
-
-                {/* Totals */}
-                <View style={styles.totalsSection}>
-                  <View style={styles.totalRow}>
-                    <Text style={styles.totalLabel}>{t('subtotal')}</Text>
-                    <Text style={styles.totalValue}>{formatCurrency(getSubtotal())}</Text>
-                  </View>
+                {newCustomerData.is_shareholder && (
                   <Input
-                    label={t('discount')}
-                    placeholder="0"
-                    value={discount}
-                    onChangeText={setDiscount}
-                    keyboardType="decimal-pad"
-                    containerStyle={styles.discountInput}
+                    label={language === 'hi' ? 'शेयरधारक पहचान संख्या *' : 'Shareholder ID Number *'}
+                    placeholder={language === 'hi' ? 'फोलियो/पहचान नंबर दर्ज करें' : 'Enter folio/ID number'}
+                    value={newCustomerData.folio_number}
+                    onChangeText={(val) => setNewCustomerData({ ...newCustomerData, folio_number: val })}
                   />
-                  <View style={styles.totalRow}>
-                    <Text style={styles.grandTotalLabel}>{t('total')}</Text>
-                    <Text style={styles.grandTotalValue}>{formatCurrency(getTotal())}</Text>
-                  </View>
+                )}
+
+                <Button
+                  title={language === 'hi' ? 'ग्राहक जोड़ें और खाता बनाएं' : 'Add Customer & Create Khata'}
+                  onPress={handleCreateNewCustomer}
+                  loading={creatingCustomer}
+                  style={styles.createCustomerBtn}
+                />
+              </View>
+            )}
+
+            {/* Existing Customer Search */}
+            {customerSelectionMode === 'existing' && (
+              <View style={styles.customerFormContainer}>
+                <View style={styles.customerFormHeader}>
+                  <TouchableOpacity onPress={() => setCustomerSelectionMode('select')}>
+                    <Ionicons name="arrow-back" size={24} color="#333" />
+                  </TouchableOpacity>
+                  <Text style={styles.customerFormTitle}>
+                    {language === 'hi' ? 'ग्राहक खोजें' : 'Search Customer'}
+                  </Text>
+                </View>
+                <View style={styles.searchInputContainer}>
+                  <Ionicons name="search" size={20} color="#999" />
+                  <TextInput
+                    style={styles.customerSearchInput}
+                    placeholder={language === 'hi' ? 'नाम या मोबाइल नंबर दर्ज करें' : 'Enter name or mobile number'}
+                    value={customerSearch}
+                    onChangeText={(val) => {
+                      setCustomerSearch(val);
+                      searchCustomers(val);
+                    }}
+                    placeholderTextColor="#999"
+                  />
                 </View>
 
-                {/* Customer Selection - MANDATORY */}
-                <Text style={styles.label}>{t('selectCustomer')} *</Text>
-                
-                {/* Customer Selection Flow - Same as Admin */}
-                {customerSelectionMode === 'select' && (
-                  <View style={styles.customerSelectionContainer}>
-                    <Text style={styles.customerSelectionTitle}>
-                      {language === 'hi' ? 'ग्राहक चयन (आवश्यक)' : 'Customer Selection (Required)'}
+                {searchingCustomers && (
+                  <Text style={styles.searchingText}>
+                    {language === 'hi' ? 'खोज रहे हैं...' : 'Searching...'}
+                  </Text>
+                )}
+
+                {searchResults.length > 0 && (
+                  <View style={styles.searchResultsContainer}>
+                    <Text style={styles.searchResultsTitle}>
+                      {language === 'hi' ? 'परिणाम:' : 'Results:'}
                     </Text>
-                    <View style={styles.customerSelectionOptions}>
+                    {searchResults.map(customer => (
                       <TouchableOpacity
-                        style={styles.customerOptionBtn}
-                        onPress={() => setCustomerSelectionMode('new')}
+                        key={customer.id}
+                        style={styles.searchResultItem}
+                        onPress={() => handleSelectExistingCustomer(customer)}
                       >
-                        <Ionicons name="person-add" size={28} color="#2E7D32" />
-                        <Text style={styles.customerOptionText}>
-                          {language === 'hi' ? 'नया ग्राहक' : 'New Customer'}
-                        </Text>
-                        <Text style={styles.customerOptionSubtext}>
-                          {language === 'hi' ? 'नया खाता बनाएं' : 'Create new Khata'}
-                        </Text>
+                        <View style={styles.searchResultInfo}>
+                          <Text style={styles.searchResultName}>{customer.name}</Text>
+                          {customer.mobile && (
+                            <Text style={styles.searchResultMobile}>
+                              <Ionicons name="call-outline" size={12} color="#666" /> {customer.mobile}
+                            </Text>
+                          )}
+                          {customer.outstanding_balance > 0 && (
+                            <Text style={styles.searchResultDue}>
+                              <Ionicons name="wallet-outline" size={12} color="#E65100" /> {language === 'hi' ? 'बकाया:' : 'Due:'} {formatCurrency(customer.outstanding_balance)}
+                            </Text>
+                          )}
+                        </View>
+                        <View style={styles.searchResultAction}>
+                          <Ionicons name="chevron-forward" size={20} color="#2E7D32" />
+                        </View>
                       </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.customerOptionBtn}
-                        onPress={() => setCustomerSelectionMode('existing')}
-                      >
-                        <Ionicons name="search" size={28} color="#1976D2" />
-                        <Text style={styles.customerOptionText}>
-                          {language === 'hi' ? 'मौजूदा ग्राहक' : 'Existing Customer'}
-                        </Text>
-                        <Text style={styles.customerOptionSubtext}>
-                          {language === 'hi' ? 'नाम/मोबाइल से खोजें' : 'Search by name/mobile'}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
+                    ))}
                   </View>
                 )}
 
-                {/* New Customer Form */}
-                {customerSelectionMode === 'new' && (
-                  <View style={styles.customerFormContainer}>
-                    <View style={styles.customerFormHeader}>
-                      <TouchableOpacity onPress={() => setCustomerSelectionMode('select')}>
-                        <Ionicons name="arrow-back" size={24} color="#333" />
-                      </TouchableOpacity>
-                      <Text style={styles.customerFormTitle}>
-                        {language === 'hi' ? 'नया ग्राहक जोड़ें' : 'Add New Customer'}
-                      </Text>
-                    </View>
-                    <Input
-                      label={`${t('customerName')} *`}
-                      placeholder={language === 'hi' ? 'ग्राहक का नाम दर्ज करें' : 'Enter customer name'}
-                      value={newCustomerData.name}
-                      onChangeText={(val) => setNewCustomerData({ ...newCustomerData, name: val })}
-                    />
-                    <Input
-                      label={t('mobile')}
-                      placeholder={language === 'hi' ? 'मोबाइल नंबर' : 'Mobile number'}
-                      value={newCustomerData.mobile}
-                      onChangeText={(val) => setNewCustomerData({ ...newCustomerData, mobile: val })}
-                      keyboardType="phone-pad"
-                    />
-                    <Input
-                      label={t('address')}
-                      placeholder={language === 'hi' ? 'पता दर्ज करें' : 'Enter address'}
-                      value={newCustomerData.address}
-                      onChangeText={(val) => setNewCustomerData({ ...newCustomerData, address: val })}
-                    />
-                    <Input
-                      label={t('village')}
-                      placeholder={language === 'hi' ? 'गाँव का नाम' : 'Village name'}
-                      value={newCustomerData.village}
-                      onChangeText={(val) => setNewCustomerData({ ...newCustomerData, village: val })}
-                    />
+                {customerSearch.length >= 2 && searchResults.length === 0 && !searchingCustomers && (
+                  <View style={styles.noResultsContainer}>
+                    <Text style={styles.noResultsText}>
+                      {language === 'hi' ? 'कोई ग्राहक नहीं मिला' : 'No customer found'}
+                    </Text>
                     <Button
-                      title={language === 'hi' ? 'ग्राहक जोड़ें और खाता बनाएं' : 'Add Customer & Create Khata'}
-                      onPress={handleCreateNewCustomer}
-                      loading={creatingCustomer}
-                      style={styles.createCustomerBtn}
+                      title={language === 'hi' ? 'नया ग्राहक बनाएं' : 'Create New Customer'}
+                      onPress={() => {
+                        setNewCustomerData({ ...newCustomerData, name: customerSearch });
+                        setCustomerSelectionMode('new');
+                      }}
+                      variant="outline"
+                      style={styles.createNewFromSearchBtn}
                     />
                   </View>
                 )}
+              </View>
+            )}
 
-                {/* Existing Customer Search */}
-                {customerSelectionMode === 'existing' && (
-                  <View style={styles.customerFormContainer}>
-                    <View style={styles.customerFormHeader}>
-                      <TouchableOpacity onPress={() => setCustomerSelectionMode('select')}>
-                        <Ionicons name="arrow-back" size={24} color="#333" />
-                      </TouchableOpacity>
-                      <Text style={styles.customerFormTitle}>
-                        {language === 'hi' ? 'ग्राहक खोजें' : 'Search Customer'}
-                      </Text>
-                    </View>
-                    <View style={styles.searchInputContainer}>
-                      <Ionicons name="search" size={20} color="#999" />
-                      <TextInput
-                        style={styles.customerSearchInput}
-                        placeholder={language === 'hi' ? 'नाम या मोबाइल नंबर दर्ज करें' : 'Enter name or mobile number'}
-                        value={customerSearch}
-                        onChangeText={(val) => {
-                          setCustomerSearch(val);
-                          searchCustomers(val);
-                        }}
-                        placeholderTextColor="#999"
-                      />
-                    </View>
-                    
-                    {searchingCustomers && (
-                      <Text style={styles.searchingText}>
-                        {language === 'hi' ? 'खोज रहे हैं...' : 'Searching...'}
+            {/* Confirmed Customer Display - with outstanding dues */}
+            {customerSelectionMode === 'confirmed' && confirmedCustomer && (
+              <View style={styles.confirmedCustomerContainer}>
+                <View style={styles.confirmedCustomerInfo}>
+                  <Ionicons name="checkmark-circle" size={24} color="#2E7D32" />
+                  <View style={styles.confirmedCustomerDetails}>
+                    <Text style={styles.confirmedCustomerName}>{confirmedCustomer.name}</Text>
+                    {confirmedCustomer.mobile && (
+                      <Text style={styles.confirmedCustomerMobile}>
+                        <Ionicons name="call-outline" size={12} color="#666" /> {confirmedCustomer.mobile}
                       </Text>
                     )}
-                    
-                    {searchResults.length > 0 && (
-                      <View style={styles.searchResultsContainer}>
-                        <Text style={styles.searchResultsTitle}>
-                          {language === 'hi' ? 'परिणाम:' : 'Results:'}
+                    {confirmedCustomer.outstanding_balance > 0 ? (
+                      <View style={styles.duesBanner}>
+                        <Ionicons name="alert-circle" size={16} color="#D32F2F" />
+                        <Text style={styles.duesBannerText}>
+                          {language === 'hi' ? 'पिछला बकाया:' : 'Outstanding Due:'} {formatCurrency(confirmedCustomer.outstanding_balance)}
                         </Text>
-                        {searchResults.map(customer => (
-                          <TouchableOpacity
-                            key={customer.id}
-                            style={styles.searchResultItem}
-                            onPress={() => handleSelectExistingCustomer(customer)}
-                          >
-                            <View style={styles.searchResultInfo}>
-                              <Text style={styles.searchResultName}>{customer.name}</Text>
-                              {customer.mobile && (
-                                <Text style={styles.searchResultMobile}>
-                                  <Ionicons name="call-outline" size={12} color="#666" /> {customer.mobile}
-                                </Text>
-                              )}
-                              {customer.village && (
-                                <Text style={styles.searchResultVillage}>
-                                  <Ionicons name="location-outline" size={12} color="#666" /> {customer.village}
-                                </Text>
-                              )}
-                            </View>
-                            <View style={styles.searchResultAction}>
-                              <Ionicons name="chevron-forward" size={20} color="#2E7D32" />
-                            </View>
-                          </TouchableOpacity>
-                        ))}
                       </View>
-                    )}
-                    
-                    {customerSearch.length >= 2 && searchResults.length === 0 && !searchingCustomers && (
-                      <View style={styles.noResultsContainer}>
-                        <Text style={styles.noResultsText}>
-                          {language === 'hi' ? 'कोई ग्राहक नहीं मिला' : 'No customer found'}
-                        </Text>
-                        <Button
-                          title={language === 'hi' ? 'नया ग्राहक बनाएं' : 'Create New Customer'}
-                          onPress={() => {
-                            setNewCustomerData({ ...newCustomerData, name: customerSearch });
-                            setCustomerSelectionMode('new');
-                          }}
-                          variant="outline"
-                          style={styles.createNewFromSearchBtn}
-                        />
-                      </View>
+                    ) : (
+                      <Text style={styles.noDuesText}>
+                        {language === 'hi' ? '✓ कोई बकाया नहीं' : '✓ No outstanding dues'}
+                      </Text>
                     )}
                   </View>
-                )}
+                </View>
+                <TouchableOpacity
+                  style={styles.changeCustomerBtn}
+                  onPress={resetCustomerSelection}
+                >
+                  <Text style={styles.changeCustomerText}>
+                    {language === 'hi' ? 'बदलें' : 'Change'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
-                {/* Confirmed Customer Display */}
-                {customerSelectionMode === 'confirmed' && confirmedCustomer && (
-                  <View style={styles.confirmedCustomerContainer}>
-                    <View style={styles.confirmedCustomerInfo}>
-                      <Ionicons name="checkmark-circle" size={24} color="#2E7D32" />
-                      <View style={styles.confirmedCustomerDetails}>
-                        <Text style={styles.confirmedCustomerName}>{confirmedCustomer.name}</Text>
-                        {confirmedCustomer.mobile && (
-                          <Text style={styles.confirmedCustomerMobile}>{confirmedCustomer.mobile}</Text>
-                        )}
-                        {confirmedCustomer.outstanding_balance > 0 && (
-                          <Text style={styles.confirmedCustomerDue}>
-                            {language === 'hi' ? 'बकाया:' : 'Due:'} {formatCurrency(confirmedCustomer.outstanding_balance)}
-                          </Text>
-                        )}
-                      </View>
-                    </View>
+            {/* 2. PRODUCTS/ITEMS - after customer confirmed */}
+            {customerSelectionMode === 'confirmed' && (
+              <>
+                <Text style={styles.label}>{t('products')}</Text>
+                <Input
+                  placeholder={language === 'hi' ? 'उत्पाद खोजें...' : 'Search products...'}
+                  value={productSearch}
+                  onChangeText={setProductSearch}
+                  containerStyle={{ marginBottom: 10 }}
+                />
+                <View style={styles.productGrid}>
+                  {filteredProducts.map(product => (
                     <TouchableOpacity
-                      style={styles.changeCustomerBtn}
-                      onPress={resetCustomerSelection}
+                      key={product.id}
+                      style={styles.productChip}
+                      onPress={() => addItem(product)}
                     >
-                      <Text style={styles.changeCustomerText}>
-                        {language === 'hi' ? 'बदलें' : 'Change'}
+                      <Text style={styles.productChipText}>
+                        {language === 'hi' && product.name_hi ? product.name_hi : product.name}
                       </Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-
-                {/* Payment Mode */}
-                <Text style={styles.label}>{t('paymentMode')}</Text>
-                <View style={styles.paymentModes}>
-                  {['cash', 'online', 'credit', 'partial'].map(mode => (
-                    <TouchableOpacity
-                      key={mode}
-                      style={[
-                        styles.paymentModeBtn,
-                        paymentMode === mode && styles.paymentModeBtnActive
-                      ]}
-                      onPress={() => setPaymentMode(mode)}
-                    >
-                      <Text style={[
-                        styles.paymentModeText,
-                        paymentMode === mode && styles.paymentModeTextActive
-                      ]}>
-                        {mode === 'cash' ? t('cash') :
-                         mode === 'online' ? t('online') :
-                         mode === 'credit' ? t('credit') : t('partial')}
-                      </Text>
+                      <Text style={styles.productUnit}>({product.unit})</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
 
-                {paymentMode === 'partial' && (
-                  <View style={styles.partialInputs}>
-                    <Input
-                      label={t('cashAmount')}
-                      placeholder="0"
-                      value={cashAmount}
-                      onChangeText={setCashAmount}
-                      keyboardType="decimal-pad"
-                      containerStyle={styles.partialInput}
+                {/* Sale Items */}
+                {saleItems.length > 0 && (
+                  <View style={styles.itemsSection}>
+                    <Text style={styles.label}>{language === 'hi' ? 'आइटम्स' : 'Items'}</Text>
+                    {saleItems.map(item => (
+                      <View key={item.product_id} style={styles.itemRow}>
+                        <View style={styles.itemInfo}>
+                          <Text style={styles.itemName}>{item.product_name}</Text>
+                          <TouchableOpacity onPress={() => removeItem(item.product_id)}>
+                            <Ionicons name="trash-outline" size={18} color="#D32F2F" />
+                          </TouchableOpacity>
+                        </View>
+                        <View style={styles.itemInputs}>
+                          <Input
+                            placeholder={t('quantity')}
+                            value={item.quantity.toString()}
+                            onChangeText={(val) => updateItemQty(item.product_id, val)}
+                            keyboardType="decimal-pad"
+                            containerStyle={styles.qtyInput}
+                          />
+                          <Text style={styles.multiply}>×</Text>
+                          <Input
+                            placeholder={t('rate')}
+                            value={item.rate > 0 ? item.rate.toString() : ''}
+                            onChangeText={(val) => updateItemRate(item.product_id, val)}
+                            keyboardType="decimal-pad"
+                            containerStyle={styles.rateInput}
+                          />
+                          <Text style={styles.equals}>=</Text>
+                          <Text style={styles.itemAmount}>{formatCurrency(item.amount)}</Text>
+                        </View>
+                      </View>
+                    ))}
+
+                    {/* 3. DISCOUNT + Totals */}
+                    <View style={styles.totalsSection}>
+                      <View style={styles.totalRow}>
+                        <Text style={styles.totalLabel}>{t('subtotal')}</Text>
+                        <Text style={styles.totalValue}>{formatCurrency(getSubtotal())}</Text>
+                      </View>
+                      <Input
+                        label={t('discount')}
+                        placeholder="0"
+                        value={discount}
+                        onChangeText={setDiscount}
+                        keyboardType="decimal-pad"
+                        containerStyle={styles.discountInput}
+                      />
+                      <View style={styles.totalRow}>
+                        <Text style={styles.grandTotalLabel}>{t('total')}</Text>
+                        <Text style={styles.grandTotalValue}>{formatCurrency(getTotal())}</Text>
+                      </View>
+                    </View>
+
+                    {/* 4. PAYMENT MODE */}
+                    <Text style={styles.label}>{t('paymentMode')}</Text>
+                    <View style={styles.paymentModes}>
+                      {['cash', 'online', 'credit', 'partial'].map(mode => (
+                        <TouchableOpacity
+                          key={mode}
+                          style={[
+                            styles.paymentModeBtn,
+                            paymentMode === mode && styles.paymentModeBtnActive
+                          ]}
+                          onPress={() => setPaymentMode(mode)}
+                        >
+                          <Text style={[
+                            styles.paymentModeText,
+                            paymentMode === mode && styles.paymentModeTextActive
+                          ]}>
+                            {mode === 'cash' ? t('cash') :
+                             mode === 'online' ? t('online') :
+                             mode === 'credit' ? t('credit') : t('partial')}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+
+                    {paymentMode === 'partial' && (
+                      <View style={styles.partialInputs}>
+                        <Input
+                          label={t('cashAmount')}
+                          placeholder="0"
+                          value={cashAmount}
+                          onChangeText={setCashAmount}
+                          keyboardType="decimal-pad"
+                          containerStyle={styles.partialInput}
+                        />
+                        <Input
+                          label={t('onlineAmount')}
+                          placeholder="0"
+                          value={onlineAmount}
+                          onChangeText={setOnlineAmount}
+                          keyboardType="decimal-pad"
+                          containerStyle={styles.partialInput}
+                        />
+                        <Text style={styles.creditCalc}>
+                          {t('creditAmount')}: {formatCurrency(Math.max(0, getTotal() - (parseFloat(cashAmount) || 0) - (parseFloat(onlineAmount) || 0)))}
+                        </Text>
+                      </View>
+                    )}
+
+                    <Button
+                      title={t('generateBill')}
+                      onPress={handleCreateSale}
+                      loading={submitting}
+                      size="large"
+                      style={styles.generateBtn}
                     />
-                    <Input
-                      label={t('onlineAmount')}
-                      placeholder="0"
-                      value={onlineAmount}
-                      onChangeText={setOnlineAmount}
-                      keyboardType="decimal-pad"
-                      containerStyle={styles.partialInput}
-                    />
-                    <Text style={styles.creditCalc}>
-                      {t('creditAmount')}: {formatCurrency(Math.max(0, getTotal() - (parseFloat(cashAmount) || 0) - (parseFloat(onlineAmount) || 0)))}
-                    </Text>
                   </View>
                 )}
-
-                <Button
-                  title={t('generateBill')}
-                  onPress={handleCreateSale}
-                  loading={submitting}
-                  size="large"
-                  style={styles.generateBtn}
-                />
-              </View>
+              </>
             )}
           </ScrollView>
         </SafeAreaView>
@@ -1204,5 +1250,65 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#2E7D32',
     fontWeight: '600',
+  },
+  // Shareholder checkbox styles
+  shareholderCheckbox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 4,
+    marginTop: 4,
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: '#2E7D32',
+    marginRight: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#FFF',
+  },
+  checkboxChecked: {
+    backgroundColor: '#2E7D32',
+    borderColor: '#2E7D32',
+  },
+  shareholderLabel: {
+    fontSize: 15,
+    color: '#333',
+    fontWeight: '500',
+    flex: 1,
+  },
+  // Dues banner styles
+  duesBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFEBEE',
+    borderLeftWidth: 3,
+    borderLeftColor: '#D32F2F',
+    borderRadius: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    marginTop: 6,
+    gap: 6,
+  },
+  duesBannerText: {
+    fontSize: 13,
+    color: '#D32F2F',
+    fontWeight: '700',
+    flex: 1,
+  },
+  noDuesText: {
+    fontSize: 12,
+    color: '#2E7D32',
+    marginTop: 4,
+    fontWeight: '500',
+  },
+  searchResultDue: {
+    fontSize: 12,
+    color: '#E65100',
+    fontWeight: '600',
+    marginTop: 2,
   },
 });

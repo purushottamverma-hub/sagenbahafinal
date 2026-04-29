@@ -461,4 +461,21 @@ agent_communication:
       - Fixed uuid4() import error in farmer purchase endpoint (line 1823 in server.py)
       - Removed non-existent /reports/customers endpoint from test (only /reports/customers/export exists)
       
+  - agent: "main"
+    message: "Billing UI Rearrangement + Shareholder Field Added (Feb 2026):
+      1. Restructured New Sale modal in BOTH (admin)/sales.tsx and (agent)/sales.tsx to follow the flow:
+         Customer Details (TOP) → Products → Items → Discount → Payment Mode → Generate Bill
+      2. Customer selection is now ALWAYS visible at the top. Products/items sections only appear after customer is confirmed.
+      3. Confirmed customer card now prominently shows outstanding dues (red banner 'Outstanding Due: ₹XXX') if > 0, or '✓ No outstanding dues' if clear.
+      4. Search results also display outstanding dues inline when searching existing customers.
+      5. New Customer form: replaced 'village' field with a 'Shareholder (FPO Member)' checkbox. When checked, a mandatory 'Shareholder ID Number' input appears.
+      6. Backend already supports customer_type='shareholder' and folio_number fields (backward-compatible).
+      7. Fixed stale state bug in resetCustomerSelection (was using old 'village' key).
+      
+      Files changed:
+      - /app/frontend/app/(admin)/sales.tsx
+      - /app/frontend/app/(agent)/sales.tsx
+      
+      Expo bundler compiled both files successfully. Awaiting user visual review before proceeding to Global Search fix / GST features."
+
       All Phase 1 Critical procurement and authentication endpoints are fully functional and ready for production use. Backend API handles stock management, authentication, and reporting correctly."
