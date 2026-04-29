@@ -83,6 +83,7 @@ export default function SalesScreen() {
   const settingsLanguage = useSettingsStore((state) => state.language);
   const [sales, setSales] = useState<Sale[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [productSearch, setProductSearch] = useState('');
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -932,25 +933,53 @@ export default function SalesScreen() {
             {/* 2. ITEMS - Products always visible */}
             <View onLayout={(e) => { productsSectionY.current = e.nativeEvent.layout.y; }}>
               <Text style={styles.label}>{t('products')}</Text>
+              <Input
+                placeholder={language === 'hi' ? 'उत्पाद खोजें (नाम या किस्म)...' : 'Search product (name or variety)...'}
+                value={productSearch}
+                onChangeText={setProductSearch}
+                containerStyle={{ marginBottom: 10 }}
+              />
               <View style={styles.productGrid}>
-                {products.map(product => (
-                  <TouchableOpacity
-                    key={product.id}
-                    style={styles.productChip}
-                    onPress={() => addItem(product)}
-                  >
-                    <Text style={styles.productChipText}>
-                      {language === 'hi' && product.name_hi ? product.name_hi : product.name}
-                    </Text>
-                    <Text style={styles.productUnit}>({product.unit})</Text>
-                    {product.varieties && product.varieties.length > 0 && (
-                      <View style={styles.varietyBadge}>
-                        <Ionicons name="layers-outline" size={10} color="#FFF" />
-                        <Text style={styles.varietyBadgeText}>{product.varieties.length}</Text>
-                      </View>
-                    )}
-                  </TouchableOpacity>
-                ))}
+                {(() => {
+                  const q = productSearch.trim().toLowerCase();
+                  const filtered = q
+                    ? products.filter(p => {
+                        const nameMatch = (p.name || '').toLowerCase().includes(q) ||
+                                          (p.name_hi || '').toLowerCase().includes(q) ||
+                                          (p.category || '').toLowerCase().includes(q);
+                        const varietyMatch = (p.varieties || []).some(v =>
+                          (v.name || '').toLowerCase().includes(q) ||
+                          (v.name_hi || '').toLowerCase().includes(q)
+                        );
+                        return nameMatch || varietyMatch;
+                      })
+                    : products;
+                  if (filtered.length === 0) {
+                    return (
+                      <Text style={styles.noProductsText}>
+                        {language === 'hi' ? 'कोई उत्पाद नहीं मिला' : 'No products match your search'}
+                      </Text>
+                    );
+                  }
+                  return filtered.map(product => (
+                    <TouchableOpacity
+                      key={product.id}
+                      style={styles.productChip}
+                      onPress={() => addItem(product)}
+                    >
+                      <Text style={styles.productChipText}>
+                        {language === 'hi' && product.name_hi ? product.name_hi : product.name}
+                      </Text>
+                      <Text style={styles.productUnit}>({product.unit})</Text>
+                      {product.varieties && product.varieties.length > 0 && (
+                        <View style={styles.varietyBadge}>
+                          <Ionicons name="layers-outline" size={10} color="#FFF" />
+                          <Text style={styles.varietyBadgeText}>{product.varieties.length}</Text>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  ));
+                })()}
               </View>
 
               {/* Sale Items */}
@@ -2063,6 +2092,15 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   varietyBadgeText: { fontSize: 10, color: '#FFF', fontWeight: '700' },
+  noProductsText: {
+    fontSize: 13,
+    color: '#999',
+    fontStyle: 'italic',
+    paddingVertical: 16,
+    paddingHorizontal: 8,
+    textAlign: 'center',
+    width: '100%',
+  },
   varietyModalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
