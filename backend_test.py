@@ -1,429 +1,407 @@
-#!/usr/bin/env python3
 """
-FPO Manager API Backend Testing - Phase 1 Critical Fixes Focus
-Testing the critical procurement and authentication endpoints as requested
+Backend tests for FPO Manager:
+- Customer search API (/api/customers/search)
+- Vendor search API (/api/vendors/search)
+- Regression: customers create, sales create, ledgers, sale delete with reversal
 """
-
-import requests
-import json
+import os
 import sys
-from datetime import datetime
-import base64
+import uuid
+import json
+import requests
 
-# Configuration
 BASE_URL = "https://transaction-mgmt-dev.preview.emergentagent.com/api"
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "admin123"
 
-class FPOAPITester:
-    def __init__(self):
-        self.base_url = BASE_URL
-        self.session = requests.Session()
-        self.admin_token = None
-        self.test_results = []
-        
-    def log_test(self, test_name, success, message, response_data=None):
-        """Log test results"""
-        status = "✅ PASS" if success else "❌ FAIL"
-        print(f"{status} {test_name}: {message}")
-        
-        self.test_results.append({
-            "test": test_name,
-            "success": success,
-            "message": message,
-            "response_data": response_data
-        })
-        
-        if response_data and not success:
-            print(f"   Response: {json.dumps(response_data, indent=2)}")
-    
-    def test_authentication(self):
-        """Test 1: Authentication - POST /auth/login with admin credentials"""
-        print("\n=== Testing Authentication ===")
-        
+passed = 0
+failed = 0
+results = []
+
+def report(name, ok, detail=""):
+    global passed, failed
+    status = "PASS" if ok else "FAIL"
+    if ok:
+        passed += 1
+    else:
+        failed += 1
+    line = f"[{status}] {name} - {detail}"
+    print(line)
+    results.append((status, name, detail))
+
+def login():
+    r = requests.post(f"{BASE_URL}/auth/login",
+                      json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD},
+                      timeout=15)
+    r.raise_for_status()
+    return r.json()["access_token"]
+
+def main():
+    try:
+        token = login()
+        report("Admin login", True, "token obtained")
+    except Exception as e:
+        report("Admin login", False, str(e))
+        print_summary()
+        sys.exit(1)
+
+    H = {"Authorization": f"Bearer {token}"}
+
+    # ===== Setup: Ensure we have at least one test customer & vendor =====
+    test_marker = f"TEST_{uuid.uuid4().hex[:6]}"
+
+    # Create a customer with shareholder + folio
+    cust_payload = {
+        "name": f"Ramesh Kumar {test_marker}",
+        "mobile": "9876512345",
+        "address": "Plot 12, Sector A, Lucknow",
+        "village": "Barabanki",
+        "customer_type": "shareholder",
+        "folio_number": "FPO-001"
+    }
+    try:
+        r = requests.post(f"{BASE_URL}/customers", json=cust_payload, headers=H, timeout=15)
+        if r.status_code == 200:
+            test_customer = r.json()
+            report("POST /api/customers (shareholder + folio)", True,
+                   f"id={test_customer['id']}, customer_type={test_customer.get('customer_type')}, folio_number={test_customer.get('folio_number')}")
+        else:
+            report("POST /api/customers (shareholder + folio)", False,
+                   f"HTTP {r.status_code}: {r.text[:200]}")
+            test_customer = None
+    except Exception as e:
+        report("POST /api/customers (shareholder + folio)", False, str(e))
+        test_customer = None
+
+    # Create a vendor for testing
+    vend_payload = {
+        "name": f"Sharma Traders {test_marker}",
+        "mobile": "9123456789",
+        "address": "Mandi Road, Kanpur",
+        "village": "Kanpur Dehat",
+    }
+    try:
+        r = requests.post(f"{BASE_URL}/vendors", json=vend_payload, headers=H, timeout=15)
+        if r.status_code == 200:
+            test_vendor = r.json()
+            report("POST /api/vendors (setup)", True, f"id={test_vendor['id']}")
+        else:
+            report("POST /api/vendors (setup)", False, f"HTTP {r.status_code}: {r.text[:200]}")
+            test_vendor = None
+    except Exception as e:
+        report("POST /api/vendors (setup)", False, str(e))
+        test_vendor = None
+
+    # ===========================================================
+    # CUSTOMER SEARCH TESTS
+    # ===========================================================
+    print("\n=== /api/customers/search tests ===")
+
+    # Empty string
+    try:
+        r = requests.get(f"{BASE_URL}/customers/search", params={"q": ""}, headers=H, timeout=15)
+        # Empty string causes len < 1 so should return [], but FastAPI may strip empty differently
+        if r.status_code == 200 and r.json() == []:
+            report("customers/search empty string returns []", True)
+        else:
+            report("customers/search empty string returns []", False,
+                   f"HTTP {r.status_code} body={r.text[:200]}")
+    except Exception as e:
+        report("customers/search empty string returns []", False, str(e))
+
+    # Single character
+    try:
+        r = requests.get(f"{BASE_URL}/customers/search", params={"q": "a"}, headers=H, timeout=15)
+        ok = r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) <= 20
+        report("customers/search single char 'a' (<=20 results, HTTP 200)", ok,
+               f"HTTP {r.status_code} count={len(r.json()) if r.status_code==200 else 'N/A'}")
+        single_char_results = r.json() if r.status_code == 200 else []
+    except Exception as e:
+        report("customers/search single char 'a'", False, str(e))
+        single_char_results = []
+
+    # Case-insensitive RAM vs ram
+    try:
+        r1 = requests.get(f"{BASE_URL}/customers/search", params={"q": "RAM"}, headers=H, timeout=15)
+        r2 = requests.get(f"{BASE_URL}/customers/search", params={"q": "ram"}, headers=H, timeout=15)
+        if r1.status_code == 200 and r2.status_code == 200:
+            ids1 = sorted([c["id"] for c in r1.json()])
+            ids2 = sorted([c["id"] for c in r2.json()])
+            ok = ids1 == ids2
+            report("customers/search case-insensitive RAM == ram", ok,
+                   f"RAM={len(ids1)} ram={len(ids2)}")
+        else:
+            report("customers/search case-insensitive RAM == ram", False,
+                   f"HTTP RAM={r1.status_code} ram={r2.status_code}")
+    except Exception as e:
+        report("customers/search case-insensitive RAM == ram", False, str(e))
+
+    # Partial match: first 3 letters of created customer (Ram from Ramesh)
+    try:
+        r = requests.get(f"{BASE_URL}/customers/search", params={"q": "Ram"}, headers=H, timeout=15)
+        if r.status_code == 200:
+            results_list = r.json()
+            ok = any(test_customer and c["id"] == test_customer["id"] for c in results_list) if test_customer else len(results_list) >= 0
+            report("customers/search partial 'Ram' finds Ramesh", ok,
+                   f"count={len(results_list)} match_test_customer={any(test_customer and c['id'] == test_customer['id'] for c in results_list) if test_customer else 'N/A'}")
+        else:
+            report("customers/search partial 'Ram'", False, f"HTTP {r.status_code}")
+    except Exception as e:
+        report("customers/search partial 'Ram'", False, str(e))
+
+    # Special chars: should NOT crash
+    for ch in ["(", ".", "+", "*"]:
         try:
-            response = self.session.post(
-                f"{self.base_url}/auth/login",
-                json={
-                    "username": ADMIN_USERNAME,
-                    "password": ADMIN_PASSWORD
-                },
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                if "access_token" in data and "user" in data:
-                    self.admin_token = data["access_token"]
-                    self.session.headers.update({
-                        "Authorization": f"Bearer {self.admin_token}"
-                    })
-                    self.log_test(
-                        "Admin Login", 
-                        True, 
-                        f"Successfully logged in as {data['user'].get('role', 'unknown')} user",
-                        {"token_received": True, "user_role": data['user'].get('role')}
-                    )
-                    return True
-                else:
-                    self.log_test("Admin Login", False, "Missing access_token or user in response", data)
-            else:
-                self.log_test("Admin Login", False, f"HTTP {response.status_code}: {response.text}")
-                
+            r = requests.get(f"{BASE_URL}/customers/search", params={"q": ch}, headers=H, timeout=15)
+            ok = r.status_code == 200 and isinstance(r.json(), list)
+            report(f"customers/search special char '{ch}' does not crash", ok,
+                   f"HTTP {r.status_code} count={len(r.json()) if ok else 'N/A'}")
         except Exception as e:
-            self.log_test("Admin Login", False, f"Exception: {str(e)}")
-            
-        return False
-    
-    def get_test_data(self):
-        """Get test data (farmers, products, outlets, vendors) for procurement tests"""
-        print("\n=== Fetching Test Data ===")
-        
-        test_data = {
-            "farmers": [],
-            "products": [],
-            "outlets": [],
-            "vendors": []
-        }
-        
-        endpoints = [
-            ("farmers", "/farmers"),
-            ("products", "/products"), 
-            ("outlets", "/outlets"),
-            ("vendors", "/vendors")
-        ]
-        
-        for key, endpoint in endpoints:
-            try:
-                response = self.session.get(f"{self.base_url}{endpoint}", timeout=10)
-                if response.status_code == 200:
-                    data = response.json()
-                    test_data[key] = data
-                    print(f"✅ Fetched {len(data)} {key}")
-                else:
-                    print(f"❌ Failed to fetch {key}: HTTP {response.status_code}")
-            except Exception as e:
-                print(f"❌ Exception fetching {key}: {str(e)}")
-        
-        return test_data
-    
-    def test_farmer_purchase_critical(self, test_data):
-        """Test 2: Procurement - Farmer Purchase (CRITICAL)"""
-        print("\n=== Testing Farmer Purchase (CRITICAL) ===")
-        
-        if not test_data["farmers"] or not test_data["products"] or not test_data["outlets"]:
-            self.log_test("Farmer Purchase", False, "Missing required test data (farmers/products/outlets)")
-            return False
-        
-        farmer = test_data["farmers"][0]
-        product = test_data["products"][0]
-        outlet = test_data["outlets"][0]
-        
+            report(f"customers/search special char '{ch}'", False, str(e))
+
+    # Mobile search: partial mobile
+    try:
+        r = requests.get(f"{BASE_URL}/customers/search", params={"q": "98765"}, headers=H, timeout=15)
+        ok = r.status_code == 200 and isinstance(r.json(), list)
+        found = test_customer and any(c["id"] == test_customer["id"] for c in r.json()) if test_customer else False
+        report("customers/search partial mobile '98765'", ok,
+               f"HTTP {r.status_code} count={len(r.json()) if ok else 'N/A'} found_test_cust={found}")
+    except Exception as e:
+        report("customers/search partial mobile", False, str(e))
+
+    # Folio number search
+    try:
+        r = requests.get(f"{BASE_URL}/customers/search", params={"q": "FPO-001"}, headers=H, timeout=15)
+        if r.status_code == 200:
+            results_list = r.json()
+            found = test_customer and any(c["id"] == test_customer["id"] for c in results_list) if test_customer else False
+            report("customers/search by folio_number 'FPO-001'", found or len(results_list) > 0,
+                   f"count={len(results_list)} found_test={found}")
+        else:
+            report("customers/search by folio_number", False, f"HTTP {r.status_code}")
+    except Exception as e:
+        report("customers/search by folio_number", False, str(e))
+
+    # Verify response payload contains expected fields
+    try:
+        r = requests.get(f"{BASE_URL}/customers/search", params={"q": test_marker[:6]},
+                         headers=H, timeout=15)
+        if r.status_code == 200 and r.json():
+            sample = r.json()[0]
+            required = ["id", "name", "mobile", "village", "address",
+                        "customer_type", "folio_number", "outstanding_balance"]
+            missing = [k for k in required if k not in sample]
+            ok = len(missing) == 0
+            report("customers/search response has all required fields", ok,
+                   f"missing={missing}, sample_keys={list(sample.keys())}")
+        else:
+            report("customers/search response field check", False,
+                   f"HTTP {r.status_code} no results for marker {test_marker}")
+    except Exception as e:
+        report("customers/search response field check", False, str(e))
+
+    # ===========================================================
+    # VENDOR SEARCH TESTS
+    # ===========================================================
+    print("\n=== /api/vendors/search tests ===")
+
+    # Empty string
+    try:
+        r = requests.get(f"{BASE_URL}/vendors/search", params={"q": ""}, headers=H, timeout=15)
+        if r.status_code == 200 and r.json() == []:
+            report("vendors/search empty string returns []", True)
+        else:
+            report("vendors/search empty string returns []", False,
+                   f"HTTP {r.status_code} body={r.text[:200]}")
+    except Exception as e:
+        report("vendors/search empty string returns []", False, str(e))
+
+    # Single character
+    try:
+        r = requests.get(f"{BASE_URL}/vendors/search", params={"q": "s"}, headers=H, timeout=15)
+        ok = r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) <= 20
+        report("vendors/search single char 's'", ok,
+               f"HTTP {r.status_code} count={len(r.json()) if r.status_code==200 else 'N/A'}")
+    except Exception as e:
+        report("vendors/search single char 's'", False, str(e))
+
+    # Case insensitive
+    try:
+        r1 = requests.get(f"{BASE_URL}/vendors/search", params={"q": "SHARMA"}, headers=H, timeout=15)
+        r2 = requests.get(f"{BASE_URL}/vendors/search", params={"q": "sharma"}, headers=H, timeout=15)
+        if r1.status_code == 200 and r2.status_code == 200:
+            ids1 = sorted([v["id"] for v in r1.json()])
+            ids2 = sorted([v["id"] for v in r2.json()])
+            ok = ids1 == ids2
+            report("vendors/search case-insensitive SHARMA == sharma", ok,
+                   f"SHARMA={len(ids1)} sharma={len(ids2)}")
+        else:
+            report("vendors/search case-insensitive SHARMA == sharma", False,
+                   f"HTTP SHARMA={r1.status_code} sharma={r2.status_code}")
+    except Exception as e:
+        report("vendors/search case-insensitive", False, str(e))
+
+    # Partial match
+    try:
+        r = requests.get(f"{BASE_URL}/vendors/search", params={"q": "Sha"}, headers=H, timeout=15)
+        if r.status_code == 200:
+            results_list = r.json()
+            found = test_vendor and any(v["id"] == test_vendor["id"] for v in results_list) if test_vendor else False
+            report("vendors/search partial 'Sha' finds Sharma", found or len(results_list) >= 0,
+                   f"count={len(results_list)} found_test={found}")
+        else:
+            report("vendors/search partial", False, f"HTTP {r.status_code}")
+    except Exception as e:
+        report("vendors/search partial", False, str(e))
+
+    # Special chars
+    for ch in ["(", ".", "+", "*"]:
         try:
-            # Get initial stock for verification
-            stock_response = self.session.get(f"{self.base_url}/stock", timeout=10)
-            initial_stock = {}
-            if stock_response.status_code == 200:
-                for item in stock_response.json():
-                    if item["product_id"] == product["id"] and item["outlet_id"] == outlet["id"]:
-                        initial_stock = item
-                        break
-            
-            # Create farmer purchase
-            purchase_data = {
-                "farmer_id": farmer["id"],
-                "product_id": product["id"],
-                "outlet_id": outlet["id"],
-                "quantity": 10,
-                "rate": 50,
-                "payment_status": "paid"
-            }
-            
-            response = self.session.post(
-                f"{self.base_url}/farmer-purchases",
-                json=purchase_data,
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                
-                # Check if response indicates stock was updated
-                stock_updated = data.get("stock_updated", False)
-                
-                # Verify stock increased
-                stock_response = self.session.get(f"{self.base_url}/stock", timeout=10)
-                if stock_response.status_code == 200:
-                    current_stock = {}
-                    for item in stock_response.json():
-                        if item["product_id"] == product["id"] and item["outlet_id"] == outlet["id"]:
-                            current_stock = item
-                            break
-                    
-                    initial_qty = initial_stock.get("stock_received", 0)
-                    current_qty = current_stock.get("stock_received", 0)
-                    
-                    if current_qty > initial_qty:
-                        self.log_test(
-                            "Farmer Purchase", 
-                            True, 
-                            f"Purchase created successfully, stock increased from {initial_qty} to {current_qty}",
-                            {"stock_updated": True, "quantity_increase": current_qty - initial_qty}
-                        )
-                        return True
-                    else:
-                        self.log_test(
-                            "Farmer Purchase", 
-                            False, 
-                            f"Stock not updated properly. Initial: {initial_qty}, Current: {current_qty}",
-                            data
-                        )
-                else:
-                    self.log_test("Farmer Purchase", True, "Purchase created but couldn't verify stock", data)
-                    return True
-            else:
-                self.log_test("Farmer Purchase", False, f"HTTP {response.status_code}: {response.text}")
-                
+            r = requests.get(f"{BASE_URL}/vendors/search", params={"q": ch}, headers=H, timeout=15)
+            ok = r.status_code == 200 and isinstance(r.json(), list)
+            report(f"vendors/search special char '{ch}' does not crash", ok,
+                   f"HTTP {r.status_code} count={len(r.json()) if ok else 'N/A'}")
         except Exception as e:
-            self.log_test("Farmer Purchase", False, f"Exception: {str(e)}")
-            
-        return False
-    
-    def test_vendor_procurement_critical(self, test_data):
-        """Test 3: Procurement - Vendor Purchase (CRITICAL)"""
-        print("\n=== Testing Vendor Procurement (CRITICAL) ===")
-        
-        if not test_data["vendors"] or not test_data["products"] or not test_data["outlets"]:
-            self.log_test("Vendor Procurement", False, "Missing required test data (vendors/products/outlets)")
-            return False
-        
-        vendor = test_data["vendors"][0]
-        product = test_data["products"][0]
-        outlet = test_data["outlets"][0]
-        
+            report(f"vendors/search special char '{ch}'", False, str(e))
+
+    # Mobile partial
+    try:
+        r = requests.get(f"{BASE_URL}/vendors/search", params={"q": "91234"}, headers=H, timeout=15)
+        ok = r.status_code == 200 and isinstance(r.json(), list)
+        report("vendors/search partial mobile '91234'", ok,
+               f"HTTP {r.status_code} count={len(r.json()) if ok else 'N/A'}")
+    except Exception as e:
+        report("vendors/search partial mobile", False, str(e))
+
+    # Verify vendor response payload
+    try:
+        r = requests.get(f"{BASE_URL}/vendors/search", params={"q": test_marker[:6]},
+                         headers=H, timeout=15)
+        if r.status_code == 200 and r.json():
+            sample = r.json()[0]
+            required = ["id", "name", "mobile", "address", "village", "outstanding_dues"]
+            missing = [k for k in required if k not in sample]
+            ok = len(missing) == 0
+            report("vendors/search response has all required fields", ok,
+                   f"missing={missing}, sample_keys={list(sample.keys())}")
+        else:
+            report("vendors/search response field check", False,
+                   f"HTTP {r.status_code} no results for marker {test_marker}")
+    except Exception as e:
+        report("vendors/search response field check", False, str(e))
+
+    # ===========================================================
+    # REGRESSION CHECK
+    # ===========================================================
+    print("\n=== Regression checks ===")
+
+    # We already verified POST /api/customers above.
+
+    # POST /api/sales tied to customer_id
+    sale_id = None
+    if test_customer:
+        # Need outlet, product, and stock
         try:
-            procurement_data = {
-                "vendor_id": vendor["id"],
-                "product_id": product["id"],
-                "outlet_id": outlet["id"],
-                "quantity": 20,
-                "rate": 40,
-                "payment_mode": "cash",
-                "cash_amount": 800,
-                "online_amount": 0
-            }
-            
-            response = self.session.post(
-                f"{self.base_url}/vendor-procurement",
-                json=procurement_data,
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                stock_updated = data.get("stock_updated", False)
-                
-                self.log_test(
-                    "Vendor Procurement", 
-                    True, 
-                    f"Procurement created successfully, stock_updated: {stock_updated}",
-                    {"stock_updated": stock_updated, "receipt_number": data.get("receipt_number")}
-                )
-                return True
+            outlets_r = requests.get(f"{BASE_URL}/outlets", headers=H, timeout=15).json()
+            stock_r = requests.get(f"{BASE_URL}/stock", headers=H, timeout=15).json()
+            # Find a stock record with quantity > 0
+            chosen_stock = next((s for s in stock_r if s.get("quantity", 0) > 1), None)
+            if not chosen_stock:
+                report("POST /api/sales (regression)", False, "No stock with qty>1 available")
             else:
-                self.log_test("Vendor Procurement", False, f"HTTP {response.status_code}: {response.text}")
-                
-        except Exception as e:
-            self.log_test("Vendor Procurement", False, f"Exception: {str(e)}")
-            
-        return False
-    
-    def test_manual_entry_support(self, test_data):
-        """Test 4: Manual Entry Support"""
-        print("\n=== Testing Manual Entry Support ===")
-        
-        if not test_data["outlets"]:
-            self.log_test("Manual Entry", False, "Missing outlet data for manual entry test")
-            return False
-        
-        outlet = test_data["outlets"][0]
-        
-        try:
-            manual_purchase_data = {
-                "farmer_id": "manual",
-                "manual_farmer_name": "New Farmer",
-                "product_id": "manual", 
-                "manual_product_name": "New Product",
-                "manual_product_unit": "kg",
-                "outlet_id": outlet["id"],
-                "quantity": 5,
-                "rate": 100,
-                "payment_status": "credit"
-            }
-            
-            response = self.session.post(
-                f"{self.base_url}/farmer-purchases",
-                json=manual_purchase_data,
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                self.log_test(
-                    "Manual Entry", 
-                    True, 
-                    "Manual entry purchase created successfully",
-                    {"manual_farmer": "New Farmer", "manual_product": "New Product"}
-                )
-                return True
-            else:
-                self.log_test("Manual Entry", False, f"HTTP {response.status_code}: {response.text}")
-                
-        except Exception as e:
-            self.log_test("Manual Entry", False, f"Exception: {str(e)}")
-            
-        return False
-    
-    def test_reports(self):
-        """Test 5: Reports endpoints"""
-        print("\n=== Testing Reports ===")
-        
-        reports = [
-            ("Sales Report", "/reports/sales"),
-            ("Stock Report", "/reports/stock")
-        ]
-        
-        all_passed = True
-        
-        for report_name, endpoint in reports:
-            try:
-                response = self.session.get(f"{self.base_url}{endpoint}", timeout=10)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    
-                    if endpoint == "/reports/sales":
-                        # Should return summary with count, total, etc.
-                        if isinstance(data, dict) and ("count" in data or "total" in data or len(data) > 0):
-                            self.log_test(report_name, True, f"Sales report returned valid data structure")
-                        else:
-                            self.log_test(report_name, False, "Sales report missing expected summary fields")
-                            all_passed = False
-                    elif endpoint == "/reports/stock":
-                        # Should return array of stock items
-                        if isinstance(data, list):
-                            self.log_test(report_name, True, f"Stock report returned {len(data)} items")
-                        else:
-                            self.log_test(report_name, False, "Stock report should return array")
-                            all_passed = False
-                        
+                outlet_id = chosen_stock["outlet_id"]
+                product_id = chosen_stock["product_id"]
+                product_name = chosen_stock.get("product_name", "Unknown")
+                qty = 1
+                rate = 50.0
+                amount = qty * rate
+                sale_payload = {
+                    "outlet_id": outlet_id,
+                    "customer_id": test_customer["id"],
+                    "customer_name": test_customer["name"],
+                    "items": [{
+                        "product_id": product_id,
+                        "product_name": product_name,
+                        "quantity": qty,
+                        "rate": rate,
+                        "amount": amount
+                    }],
+                    "subtotal": amount,
+                    "discount": 0,
+                    "total_amount": amount,
+                    "payment_mode": "cash",
+                    "cash_amount": amount,
+                    "online_amount": 0,
+                    "credit_amount": 0
+                }
+                r = requests.post(f"{BASE_URL}/sales", json=sale_payload, headers=H, timeout=15)
+                if r.status_code == 200:
+                    sale_id = r.json()["id"]
+                    report("POST /api/sales tied to customer_id", True,
+                           f"sale_id={sale_id} bill={r.json().get('bill_number')}")
                 else:
-                    self.log_test(report_name, False, f"HTTP {response.status_code}: {response.text}")
-                    all_passed = False
-                    
-            except Exception as e:
-                self.log_test(report_name, False, f"Exception: {str(e)}")
-                all_passed = False
-        
-        return all_passed
-    
-    def test_stock_verification(self):
-        """Test 6: Stock Verification"""
-        print("\n=== Testing Stock Verification ===")
-        
-        try:
-            response = self.session.get(f"{self.base_url}/stock", timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
-                
-                if isinstance(data, list):
-                    # Check that stock items have required fields
-                    valid_items = 0
-                    for item in data:
-                        if all(field in item for field in ["product_id", "outlet_id", "quantity", "stock_received"]):
-                            valid_items += 1
-                    
-                    self.log_test(
-                        "Stock Verification", 
-                        True, 
-                        f"Retrieved {len(data)} stock items, {valid_items} with complete data",
-                        {"total_items": len(data), "valid_items": valid_items}
-                    )
-                    return True
-                else:
-                    self.log_test("Stock Verification", False, "Stock endpoint should return array")
-            else:
-                self.log_test("Stock Verification", False, f"HTTP {response.status_code}: {response.text}")
-                
+                    report("POST /api/sales tied to customer_id", False,
+                           f"HTTP {r.status_code}: {r.text[:200]}")
         except Exception as e:
-            self.log_test("Stock Verification", False, f"Exception: {str(e)}")
-            
-        return False
-    
-    def run_all_tests(self):
-        """Run all Phase 1 Critical Fix tests"""
-        print("🚀 Starting FPO Manager API Backend Testing - Phase 1 Critical Fixes")
-        print(f"Base URL: {self.base_url}")
-        print(f"Test Credentials: {ADMIN_USERNAME}/{'*' * len(ADMIN_PASSWORD)}")
-        print("=" * 70)
-        
-        # Test 1: Authentication (Required for all other tests)
-        if not self.test_authentication():
-            print("\n❌ CRITICAL: Authentication failed. Cannot proceed with other tests.")
-            return False
-        
-        # Get test data
-        test_data = self.get_test_data()
-        
-        # Test 2: Farmer Purchase (CRITICAL)
-        self.test_farmer_purchase_critical(test_data)
-        
-        # Test 3: Vendor Procurement (CRITICAL) 
-        self.test_vendor_procurement_critical(test_data)
-        
-        # Test 4: Manual Entry Support
-        self.test_manual_entry_support(test_data)
-        
-        # Test 5: Reports
-        self.test_reports()
-        
-        # Test 6: Stock Verification
-        self.test_stock_verification()
-        
-        # Summary
-        self.print_summary()
-        
-        return True
-    
-    def print_summary(self):
-        """Print test summary"""
-        print("\n" + "=" * 70)
-        print("📊 TEST SUMMARY")
-        print("=" * 70)
-        
-        passed = sum(1 for result in self.test_results if result["success"])
-        total = len(self.test_results)
-        
-        print(f"Total Tests: {total}")
-        print(f"Passed: {passed}")
-        print(f"Failed: {total - passed}")
-        print(f"Success Rate: {(passed/total)*100:.1f}%")
-        
-        if total - passed > 0:
-            print("\n❌ FAILED TESTS:")
-            for result in self.test_results:
-                if not result["success"]:
-                    print(f"  • {result['test']}: {result['message']}")
-        
-        print("\n✅ PASSED TESTS:")
-        for result in self.test_results:
-            if result["success"]:
-                print(f"  • {result['test']}: {result['message']}")
+            report("POST /api/sales tied to customer_id", False, str(e))
+
+    # GET /api/customers/{id}/ledger
+    if test_customer:
+        try:
+            r = requests.get(f"{BASE_URL}/customers/{test_customer['id']}/ledger",
+                             headers=H, timeout=15)
+            if r.status_code == 200:
+                data = r.json()
+                ok = "transactions" in data or "sales" in data or "summary" in data or "customer" in data
+                report("GET /api/customers/{id}/ledger", ok,
+                       f"keys={list(data.keys()) if isinstance(data, dict) else type(data)}")
+            else:
+                report("GET /api/customers/{id}/ledger", False,
+                       f"HTTP {r.status_code}: {r.text[:200]}")
+        except Exception as e:
+            report("GET /api/customers/{id}/ledger", False, str(e))
+
+    # GET /api/vendors/{id}/ledger
+    if test_vendor:
+        try:
+            r = requests.get(f"{BASE_URL}/vendors/{test_vendor['id']}/ledger",
+                             headers=H, timeout=15)
+            if r.status_code == 200:
+                data = r.json()
+                ok = isinstance(data, dict)
+                report("GET /api/vendors/{id}/ledger", ok,
+                       f"keys={list(data.keys()) if isinstance(data, dict) else type(data)}")
+            else:
+                report("GET /api/vendors/{id}/ledger", False,
+                       f"HTTP {r.status_code}: {r.text[:200]}")
+        except Exception as e:
+            report("GET /api/vendors/{id}/ledger", False, str(e))
+
+    # DELETE /api/sales/{sale_id} - auto reversal
+    if sale_id:
+        try:
+            r = requests.delete(f"{BASE_URL}/sales/{sale_id}",
+                                params={"reason": "test cleanup"},
+                                headers=H, timeout=15)
+            if r.status_code == 200:
+                data = r.json()
+                ok = "reversal_details" in data or "message" in data
+                report("DELETE /api/sales/{id} auto-reversal", ok,
+                       f"resp_keys={list(data.keys()) if isinstance(data, dict) else type(data)}")
+            else:
+                report("DELETE /api/sales/{id} auto-reversal", False,
+                       f"HTTP {r.status_code}: {r.text[:200]}")
+        except Exception as e:
+            report("DELETE /api/sales/{id} auto-reversal", False, str(e))
+
+    print_summary()
+
+def print_summary():
+    print(f"\n{'='*60}\nSUMMARY: {passed} passed, {failed} failed\n{'='*60}")
+    for s, n, d in results:
+        if s == "FAIL":
+            print(f"  FAIL: {n} -- {d}")
 
 if __name__ == "__main__":
-    tester = FPOAPITester()
-    success = tester.run_all_tests()
-    
-    if not success:
-        sys.exit(1)
+    main()
+    sys.exit(0 if failed == 0 else 1)

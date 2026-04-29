@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -120,6 +120,12 @@ export default function SalesScreen() {
     days_remaining?: number;
   } | null>(null);
 
+  // Auto-scroll refs & positions
+  const modalScrollRef = useRef<ScrollView>(null);
+  const productsSectionY = useRef<number>(0);
+  const itemsSectionY = useRef<number>(0);
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const fetchData = async () => {
     try {
       const [salesRes, productsRes, outletsRes, customersRes] = await Promise.all([
@@ -152,16 +158,18 @@ export default function SalesScreen() {
     fetchData();
   }, []);
 
-  // Customer Search Function
+  // Customer Search Function (debounced inside the onChange handler below)
   const searchCustomers = async (query: string) => {
-    if (!query || query.length < 2) {
+    const trimmed = (query || '').trim();
+    if (!trimmed) {
       setSearchResults([]);
+      setSearchingCustomers(false);
       return;
     }
-    
+
     setSearchingCustomers(true);
     try {
-      const response = await api.get('/customers/search', { params: { q: query } });
+      const response = await api.get('/customers/search', { params: { q: trimmed } });
       setSearchResults(response.data);
     } catch (error) {
       console.error('Search error:', error);
@@ -170,6 +178,38 @@ export default function SalesScreen() {
       setSearchingCustomers(false);
     }
   };
+
+  // Debounced search trigger (300ms) — call this from the input onChange
+  const onCustomerSearchChange = (val: string) => {
+    setCustomerSearch(val);
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+    }
+    // Show loader instantly for responsive feel
+    if (val.trim()) setSearchingCustomers(true);
+    else setSearchResults([]);
+    searchDebounceRef.current = setTimeout(() => {
+      searchCustomers(val);
+    }, 300);
+  };
+
+  // Auto-scroll when customer is confirmed → jump to products section
+  useEffect(() => {
+    if (customerSelectionMode === 'confirmed' && modalScrollRef.current) {
+      setTimeout(() => {
+        modalScrollRef.current?.scrollTo({ y: Math.max(0, productsSectionY.current - 16), animated: true });
+      }, 150);
+    }
+  }, [customerSelectionMode]);
+
+  // Auto-scroll when first item is added → jump to items/totals section
+  useEffect(() => {
+    if (saleItems.length === 1 && modalScrollRef.current) {
+      setTimeout(() => {
+        modalScrollRef.current?.scrollTo({ y: Math.max(0, itemsSectionY.current - 16), animated: true });
+      }, 200);
+    }
+  }, [saleItems.length]);
 
   // Create New Customer and auto-create Khata
   const handleCreateNewCustomer = async () => {
@@ -609,7 +649,7 @@ export default function SalesScreen() {
             <View style={{ width: 28 }} />
           </View>
 
-          <ScrollView style={styles.modalContent}>
+          <ScrollView ref={modalScrollRef} style={styles.modalContent}>
             {/* Outlet Selection */}
             <Text style={styles.label}>{t('outlets')}</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.outletScroll}>
@@ -758,10 +798,7 @@ export default function SalesScreen() {
                   <Input
                     placeholder={language === 'hi' ? 'नाम या मोबाइल नंबर दर्ज करें' : 'Enter name or mobile number'}
                     value={customerSearch}
-                    onChangeText={(val) => {
-                      setCustomerSearch(val);
-                      searchCustomers(val);
-                    }}
+                    onChangeText={onCustomerSearchChange}
                     containerStyle={styles.searchInputWrapper}
                   />
                 </View>
@@ -804,7 +841,7 @@ export default function SalesScreen() {
                   </View>
                 )}
 
-                {customerSearch.length >= 2 && searchResults.length === 0 && !searchingCustomers && (
+                {customerSearch.trim().length >= 1 && searchResults.length === 0 && !searchingCustomers && (
                   <View style={styles.noResultsContainer}>
                     <Text style={styles.noResultsText}>
                       {language === 'hi' ? 'कोई ग्राहक नहीं मिला' : 'No customer found'}
@@ -862,7 +899,7 @@ export default function SalesScreen() {
 
             {/* 2. ITEMS - Products only shown after customer confirmed */}
             {customerSelectionMode === 'confirmed' && (
-              <>
+              <View onLayout={(e) => { productsSectionY.current = e.nativeEvent.layout.y; }}>
                 <Text style={styles.label}>{t('products')}</Text>
                 <View style={styles.productGrid}>
                   {products.map(product => (
@@ -881,7 +918,7 @@ export default function SalesScreen() {
 
                 {/* Sale Items */}
                 {saleItems.length > 0 && (
-                  <View style={styles.itemsSection}>
+                  <View style={styles.itemsSection} onLayout={(e) => { itemsSectionY.current = productsSectionY.current + e.nativeEvent.layout.y; }}>
                     <Text style={styles.label}>{language === 'hi' ? 'आइटम्स' : 'Items'}</Text>
                     {saleItems.map(item => (
                       <View key={item.product_id} style={styles.itemRow}>
@@ -990,7 +1027,7 @@ export default function SalesScreen() {
                     />
                   </View>
                 )}
-              </>
+              </View>
             )}
           </ScrollView>
         </SafeAreaView>

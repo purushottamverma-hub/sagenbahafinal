@@ -1611,27 +1611,33 @@ async def search_customers(
     current_user: dict = Depends(get_current_user)
 ):
     """Quick search endpoint for customers - used in autocomplete"""
-    if not q or len(q) < 2:
+    if not q or len(q.strip()) < 1:
         return []
-    
+
     import re
-    search_regex = re.compile(q, re.IGNORECASE)
+    # Escape special regex chars so user input like "(", "+" doesn't crash the query
+    safe_q = re.escape(q.strip())
+    search_regex = {"$regex": safe_q, "$options": "i"}
     query = {
         "is_active": True,
         "$or": [
-            {"name": {"$regex": search_regex}},
-            {"mobile": {"$regex": search_regex}},
-            {"village": {"$regex": search_regex}}
+            {"name": search_regex},
+            {"mobile": search_regex},
+            {"village": search_regex},
+            {"address": search_regex},
+            {"folio_number": search_regex},
         ]
     }
-    
+
     customers = await db.customers.find(query).limit(20).to_list(20)
     return [{
         "id": c["id"],
         "name": c["name"],
         "mobile": c.get("mobile", ""),
         "village": c.get("village", ""),
+        "address": c.get("address", ""),
         "customer_type": c.get("customer_type", "walk_in"),
+        "folio_number": c.get("folio_number", ""),
         "outstanding_balance": c.get("outstanding_balance", 0)
     } for c in customers]
 
@@ -2539,20 +2545,23 @@ async def search_vendors(
     current_user: dict = Depends(get_current_user)
 ):
     """Quick search endpoint for vendors - used in autocomplete"""
-    if not q or len(q) < 2:
+    if not q or len(q.strip()) < 1:
         return []
-    
+
     import re
-    search_regex = re.compile(q, re.IGNORECASE)
+    # Escape special regex chars so user input like "(", "+" doesn't crash the query
+    safe_q = re.escape(q.strip())
+    search_regex = {"$regex": safe_q, "$options": "i"}
     query = {
         "is_active": True,
         "$or": [
-            {"name": {"$regex": search_regex}},
-            {"mobile": {"$regex": search_regex}},
-            {"village": {"$regex": search_regex}}
+            {"name": search_regex},
+            {"mobile": search_regex},
+            {"village": search_regex},
+            {"address": search_regex},
         ]
     }
-    
+
     vendors = await db.vendors.find(query).limit(20).to_list(20)
     return [{
         "id": v["id"],

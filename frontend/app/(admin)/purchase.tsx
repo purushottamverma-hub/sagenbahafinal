@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -112,6 +112,11 @@ export default function PurchaseScreen() {
   const [creatingVendor, setCreatingVendor] = useState(false);
   const [confirmedVendor, setConfirmedVendor] = useState<Vendor | null>(null);
 
+  // Auto-scroll refs & positions
+  const modalScrollRef = useRef<ScrollView>(null);
+  const afterVendorSectionY = useRef<number>(0);
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const fetchData = async () => {
     try {
       const [farmerPurchaseRes, vendorPurchaseRes, farmerRes, vendorRes, productRes, outletRes] = await Promise.all([
@@ -162,14 +167,16 @@ export default function PurchaseScreen() {
 
   // Vendor Search Function
   const searchVendors = async (query: string) => {
-    if (!query || query.length < 2) {
+    const trimmed = (query || '').trim();
+    if (!trimmed) {
       setVendorSearchResults([]);
+      setSearchingVendors(false);
       return;
     }
-    
+
     setSearchingVendors(true);
     try {
-      const response = await api.get('/vendors/search', { params: { q: query } });
+      const response = await api.get('/vendors/search', { params: { q: trimmed } });
       setVendorSearchResults(response.data);
     } catch (error) {
       console.error('Vendor search error:', error);
@@ -178,6 +185,28 @@ export default function PurchaseScreen() {
       setSearchingVendors(false);
     }
   };
+
+  // Debounced vendor search handler
+  const onVendorSearchChange = (val: string) => {
+    setVendorSearch(val);
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+    }
+    if (val.trim()) setSearchingVendors(true);
+    else setVendorSearchResults([]);
+    searchDebounceRef.current = setTimeout(() => {
+      searchVendors(val);
+    }, 300);
+  };
+
+  // Auto-scroll when vendor is confirmed → jump below to next section
+  useEffect(() => {
+    if (vendorSelectionMode === 'confirmed' && modalScrollRef.current) {
+      setTimeout(() => {
+        modalScrollRef.current?.scrollTo({ y: Math.max(0, afterVendorSectionY.current - 16), animated: true });
+      }, 150);
+    }
+  }, [vendorSelectionMode]);
 
   // Create New Vendor and auto-create Khata
   const handleCreateNewVendor = async () => {
@@ -508,7 +537,7 @@ export default function PurchaseScreen() {
       {/* New Purchase Modal */}
       <Modal visible={showModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <ScrollView contentContainerStyle={styles.modalScrollContent}>
+          <ScrollView ref={modalScrollRef} contentContainerStyle={styles.modalScrollContent}>
             <View style={styles.modalContent}>
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>
@@ -717,10 +746,7 @@ export default function PurchaseScreen() {
                           style={styles.searchInput}
                           placeholder={language === 'hi' ? 'नाम या मोबाइल दर्ज करें' : 'Enter name or mobile'}
                           value={vendorSearch}
-                          onChangeText={(val) => {
-                            setVendorSearch(val);
-                            searchVendors(val);
-                          }}
+                          onChangeText={onVendorSearchChange}
                           placeholderTextColor="#999"
                         />
                       </View>
@@ -763,7 +789,7 @@ export default function PurchaseScreen() {
                         </View>
                       )}
                       
-                      {vendorSearch.length >= 2 && vendorSearchResults.length === 0 && !searchingVendors && (
+                      {vendorSearch.trim().length >= 1 && vendorSearchResults.length === 0 && !searchingVendors && (
                         <View style={styles.noResultsContainer}>
                           <Text style={styles.noResultsText}>
                             {language === 'hi' ? 'कोई विक्रेता नहीं मिला' : 'No vendor found'}
@@ -813,7 +839,10 @@ export default function PurchaseScreen() {
               )}
 
               {/* Manual Entry Toggle for Product */}
-              <View style={styles.manualToggle}>
+              <View
+                style={styles.manualToggle}
+                onLayout={(e) => { afterVendorSectionY.current = e.nativeEvent.layout.y; }}
+              >
                 <Text style={styles.manualToggleText}>
                   {language === 'hi' ? 'उत्पाद मैन्युअल लिखें' : 'Write product manually'}
                 </Text>

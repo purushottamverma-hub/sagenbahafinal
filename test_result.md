@@ -290,6 +290,42 @@ backend:
         agent: "testing"
         comment: "Feature C: Search Functionality tested successfully. All 3 endpoints working for client-side filtering: 1) GET /api/products - Retrieved 5 products successfully. 2) GET /api/outlets - Retrieved 3 outlets successfully. 3) GET /api/stock - Retrieved 8 stock records successfully. All endpoints return proper HTTP 200 status codes and complete data for frontend client-side filtering functionality."
 
+  - task: "Customer Search API (/api/customers/search)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Comprehensive testing of refactored /api/customers/search endpoint completed - ALL 11 test cases passed. 1) Empty string returns []. 2) Single char 'a' returns up to 20 matches with HTTP 200 (1-char minimum confirmed). 3) Case-insensitive: RAM and ram return identical IDs. 4) Partial 'Ram' correctly finds 'Ramesh Kumar TEST_xxx'. 5) Special chars '(', '.', '+', '*' all return HTTP 200 with empty list (re.escape() works correctly, no regex crashes). 6) Partial mobile '98765' finds the test customer. 7) folio_number 'FPO-001' search successfully matches the shareholder customer. 8) Response payload contains all required fields: id, name, mobile, village, address, customer_type, folio_number, outstanding_balance. Endpoint requires admin auth via Depends(get_current_user) and works correctly."
+
+  - task: "Vendor Search API (/api/vendors/search)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Comprehensive testing of refactored /api/vendors/search endpoint completed - ALL 9 test cases passed. 1) Empty string returns []. 2) Single char 's' returns up to 20 matches with HTTP 200. 3) Case-insensitive: SHARMA and sharma return identical IDs. 4) Partial 'Sha' correctly finds 'Sharma Traders TEST_xxx'. 5) Special chars '(', '.', '+', '*' all safe (re.escape applied). 6) Partial mobile '91234' finds vendor. 7) Response payload contains all required fields: id, name, mobile, address, village, outstanding_dues. Endpoint requires admin auth via Depends(get_current_user) and works correctly."
+
+  - task: "Regression - Customer/Sale/Ledger/Sale-Delete"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Regression checks all PASS (5/5): 1) POST /api/customers with customer_type='shareholder' and folio_number='FPO-001' creates customer correctly. 2) POST /api/sales tied to customer_id creates sale and generates bill_number (BILL202604290007). 3) GET /api/customers/{id}/ledger returns customer, transactions, summary, sales, payments keys. 4) GET /api/vendors/{id}/ledger returns vendor, transactions, summary, purchases, payments keys. 5) DELETE /api/sales/{sale_id} performs auto-reversal (stock restored + customer ledger adjusted) and returns reversal_details. No data wiped - test entities flagged with TEST_ prefix."
+
 frontend:
   - task: "Admin Management Screen (Outlets, Products, Vendors, Customers, Farmers)"
     implemented: true
@@ -366,7 +402,9 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Customer Search API (/api/customers/search)"
+    - "Vendor Search API (/api/vendors/search)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -478,4 +516,51 @@ agent_communication:
       
       Expo bundler compiled both files successfully. Awaiting user visual review before proceeding to Global Search fix / GST features."
 
+  - agent: "main"
+    message: "Search + Auto-Scroll UX fixes (Feb 2026):
+      Backend changes (server.py):
+      1. /api/customers/search - Now uses re.escape() to safely handle special characters (parentheses, dots, etc.), lowered minimum chars from 2 to 1, added folio_number & address to searchable fields. Returns folio_number and address fields in response.
+      2. /api/vendors/search - Same escape + minimum 1 char + added address to searchable fields.
+      
+      Frontend changes (admin/sales.tsx, agent/sales.tsx, admin/purchase.tsx):
+      1. Added debounced search (300ms) to prevent API flooding and race conditions.
+      2. Search now works from 1 character (was 2).
+      3. Added auto-scroll: when customer/vendor is confirmed → ScrollView smoothly scrolls to the next section (products/items); when first item added → scrolls to items/totals.
+      4. Used useRef + onLayout to capture section Y positions.
+      
+      Testing needed: 
+      - Backend: test /api/customers/search and /api/vendors/search with various queries including special chars, 1-char strings, partial names.
+      - Frontend: visual confirmation from user."
+
+
       All Phase 1 Critical procurement and authentication endpoints are fully functional and ready for production use. Backend API handles stock management, authentication, and reporting correctly."
+  - agent: "testing"
+    message: "Search APIs + regression testing completed (28/28 tests passed, 100% success rate).
+      
+      Customer Search (/api/customers/search) - 11 tests pass:
+      - Empty string returns []
+      - Single-char query 'a' works (1-char minimum verified)
+      - Case-insensitive: RAM and ram return identical results
+      - Partial 'Ram' finds 'Ramesh Kumar'
+      - Special chars '(', '.', '+', '*' all return HTTP 200 (re.escape() prevents crashes)
+      - Mobile partial '98765' works
+      - folio_number 'FPO-001' search works
+      - Response payload contains: id, name, mobile, village, address, customer_type, folio_number, outstanding_balance
+      
+      Vendor Search (/api/vendors/search) - 9 tests pass:
+      - Empty string returns []
+      - Single-char query works
+      - Case-insensitive (SHARMA == sharma)
+      - Partial match works
+      - Special chars all safe
+      - Mobile partial works
+      - Response payload contains: id, name, mobile, address, village, outstanding_dues
+      
+      Regression - 5 tests pass:
+      - POST /api/customers with customer_type='shareholder' and folio_number='FPO-001' OK
+      - POST /api/sales tied to customer_id generates bill_number OK
+      - GET /api/customers/{id}/ledger returns full ledger structure
+      - GET /api/vendors/{id}/ledger returns full ledger structure
+      - DELETE /api/sales/{sale_id} performs auto-reversal correctly (stock + customer ledger)
+      
+      Test artifacts use TEST_<uuid> prefix. No data wiped. Created /app/backend_test.py with all tests."
