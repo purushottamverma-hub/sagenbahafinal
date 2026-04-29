@@ -32,6 +32,8 @@ interface Vendor {
   name: string;
   mobile?: string;
   address?: string;
+  village?: string;
+  outstanding_dues?: number;
 }
 
 interface Product {
@@ -96,6 +98,20 @@ export default function PurchaseScreen() {
   const [manualProductName, setManualProductName] = useState('');
   const [manualProductUnit, setManualProductUnit] = useState('kg');
 
+  // Vendor Selection Flow State (similar to Customer in Sales)
+  const [vendorSelectionMode, setVendorSelectionMode] = useState<'select' | 'new' | 'existing' | 'confirmed'>('select');
+  const [vendorSearch, setVendorSearch] = useState('');
+  const [vendorSearchResults, setVendorSearchResults] = useState<Vendor[]>([]);
+  const [searchingVendors, setSearchingVendors] = useState(false);
+  const [newVendorData, setNewVendorData] = useState({
+    name: '',
+    mobile: '',
+    address: '',
+    village: '',
+  });
+  const [creatingVendor, setCreatingVendor] = useState(false);
+  const [confirmedVendor, setConfirmedVendor] = useState<Vendor | null>(null);
+
   const fetchData = async () => {
     try {
       const [farmerPurchaseRes, vendorPurchaseRes, farmerRes, vendorRes, productRes, outletRes] = await Promise.all([
@@ -142,6 +158,79 @@ export default function PurchaseScreen() {
     setRefreshing(true);
     await fetchData();
     setRefreshing(false);
+  };
+
+  // Vendor Search Function
+  const searchVendors = async (query: string) => {
+    if (!query || query.length < 2) {
+      setVendorSearchResults([]);
+      return;
+    }
+    
+    setSearchingVendors(true);
+    try {
+      const response = await api.get('/vendors/search', { params: { q: query } });
+      setVendorSearchResults(response.data);
+    } catch (error) {
+      console.error('Vendor search error:', error);
+      setVendorSearchResults([]);
+    } finally {
+      setSearchingVendors(false);
+    }
+  };
+
+  // Create New Vendor and auto-create Khata
+  const handleCreateNewVendor = async () => {
+    if (!newVendorData.name.trim()) {
+      Alert.alert(language === 'hi' ? 'त्रुटि' : 'Error', language === 'hi' ? 'विक्रेता का नाम आवश्यक है' : 'Vendor name is required');
+      return;
+    }
+
+    setCreatingVendor(true);
+    try {
+      const response = await api.post('/vendors', {
+        name: newVendorData.name.trim(),
+        mobile: newVendorData.mobile.trim() || null,
+        address: newVendorData.address.trim() || null,
+        village: newVendorData.village.trim() || null,
+      });
+      
+      const newVendor: Vendor = response.data;
+      setConfirmedVendor(newVendor);
+      setSelectedSource(newVendor.id);
+      setVendorSelectionMode('confirmed');
+      
+      // Refresh vendors list
+      fetchData();
+      
+      Alert.alert(
+        language === 'hi' ? 'सफल' : 'Success',
+        language === 'hi' 
+          ? `विक्रेता "${newVendor.name}" सफलतापूर्वक जोड़ा गया। खाता (Khata) स्वचालित रूप से बन गया।`
+          : `Vendor "${newVendor.name}" added successfully. Khata (Ledger) auto-created.`
+      );
+    } catch (error: any) {
+      Alert.alert(language === 'hi' ? 'त्रुटि' : 'Error', error.response?.data?.detail || 'Failed to create vendor');
+    } finally {
+      setCreatingVendor(false);
+    }
+  };
+
+  // Select existing vendor
+  const handleSelectExistingVendor = (vendor: Vendor) => {
+    setConfirmedVendor(vendor);
+    setSelectedSource(vendor.id);
+    setVendorSelectionMode('confirmed');
+  };
+
+  // Reset vendor selection
+  const resetVendorSelection = () => {
+    setVendorSelectionMode('select');
+    setConfirmedVendor(null);
+    setSelectedSource('');
+    setVendorSearch('');
+    setVendorSearchResults([]);
+    setNewVendorData({ name: '', mobile: '', address: '', village: '' });
   };
 
   // Filtered lists based on search
@@ -192,14 +281,29 @@ export default function PurchaseScreen() {
       return;
     }
 
-    // Validate source
-    if (!useManualSource && !selectedSource) {
-      Alert.alert(language === 'hi' ? 'त्रुटि' : 'Error', language === 'hi' ? 'किसान/विक्रेता चुनें' : 'Select farmer/vendor');
-      return;
+    // For vendor purchases, require mandatory vendor selection (new flow)
+    if (sourceType === 'vendor' && !useManualSource) {
+      if (vendorSelectionMode !== 'confirmed' || !confirmedVendor) {
+        Alert.alert(
+          language === 'hi' ? 'त्रुटि' : 'Error', 
+          language === 'hi' 
+            ? 'कृपया पहले विक्रेता चुनें। खरीद से पहले विक्रेता चयन आवश्यक है।' 
+            : 'Please select a vendor first. Vendor selection is mandatory before purchase.'
+        );
+        return;
+      }
     }
-    if (useManualSource && !manualSourceName.trim()) {
-      Alert.alert(language === 'hi' ? 'त्रुटि' : 'Error', language === 'hi' ? 'नाम दर्ज करें' : 'Enter name');
-      return;
+
+    // Validate source (for farmer purchases or manual entry)
+    if (sourceType === 'farmer' || useManualSource) {
+      if (!useManualSource && !selectedSource) {
+        Alert.alert(language === 'hi' ? 'त्रुटि' : 'Error', language === 'hi' ? 'किसान/विक्रेता चुनें' : 'Select farmer/vendor');
+        return;
+      }
+      if (useManualSource && !manualSourceName.trim()) {
+        Alert.alert(language === 'hi' ? 'त्रुटि' : 'Error', language === 'hi' ? 'नाम दर्ज करें' : 'Enter name');
+        return;
+      }
     }
 
     // Validate product
@@ -236,9 +340,10 @@ export default function PurchaseScreen() {
           outlet_id: selectedOutlet,
         });
       } else {
-        // Vendor procurement with optional manual entries
+        // Vendor procurement - use confirmedVendor from selection flow or manual entry
+        const vendorId = useManualSource ? 'manual' : (confirmedVendor?.id || selectedSource);
         await api.post('/vendor-procurement', {
-          vendor_id: useManualSource ? 'manual' : selectedSource,
+          vendor_id: vendorId,
           manual_vendor_name: useManualSource ? manualSourceName : null,
           manual_vendor_mobile: useManualSource ? manualSourceMobile : null,
           product_id: useManualProduct ? 'manual' : selectedProduct,
@@ -290,6 +395,12 @@ export default function PurchaseScreen() {
     setUseManualProduct(false);
     setManualProductName('');
     setManualProductUnit('kg');
+    // Reset vendor selection flow
+    setVendorSelectionMode('select');
+    setConfirmedVendor(null);
+    setVendorSearch('');
+    setVendorSearchResults([]);
+    setNewVendorData({ name: '', mobile: '', address: '', village: '' });
   };
 
   const renderPurchase = ({ item }: { item: Purchase }) => (
@@ -465,14 +576,11 @@ export default function PurchaseScreen() {
                     keyboardType="phone-pad"
                   />
                 </View>
-              ) : (
+              ) : sourceType === 'farmer' ? (
                 <>
-                  {/* Source Search & Selection */}
+                  {/* Farmer Search & Selection - Original flow */}
                   <Text style={styles.label}>
-                    {sourceType === 'farmer' 
-                      ? (language === 'hi' ? 'किसान चुनें' : 'Select Farmer')
-                      : (language === 'hi' ? 'विक्रेता चुनें' : 'Select Vendor')
-                    } *
+                    {language === 'hi' ? 'किसान चुनें' : 'Select Farmer'} *
                   </Text>
                   <View style={styles.searchBox}>
                     <Ionicons name="search" size={18} color="#999" />
@@ -495,7 +603,7 @@ export default function PurchaseScreen() {
                         key={s.id}
                         style={[
                           styles.selectChip,
-                          selectedSource === s.id && (sourceType === 'farmer' ? styles.farmerChipActive : styles.vendorChipActive)
+                          selectedSource === s.id && styles.farmerChipActive
                         ]}
                         onPress={() => setSelectedSource(s.id)}
                       >
@@ -510,6 +618,197 @@ export default function PurchaseScreen() {
                       </TouchableOpacity>
                     ))}
                   </ScrollView>
+                </>
+              ) : (
+                <>
+                  {/* VENDOR SELECTION FLOW - Mandatory with Khata auto-creation */}
+                  <Text style={styles.label}>
+                    {language === 'hi' ? 'विक्रेता चुनें' : 'Select Vendor'} *
+                  </Text>
+
+                  {/* Select Mode - New or Existing */}
+                  {vendorSelectionMode === 'select' && (
+                    <View style={styles.vendorSelectionContainer}>
+                      <Text style={styles.vendorSelectionTitle}>
+                        {language === 'hi' ? 'विक्रेता चयन (आवश्यक)' : 'Vendor Selection (Required)'}
+                      </Text>
+                      <View style={styles.vendorSelectionOptions}>
+                        <TouchableOpacity
+                          style={styles.vendorOptionBtn}
+                          onPress={() => setVendorSelectionMode('new')}
+                        >
+                          <Ionicons name="person-add" size={28} color="#7B1FA2" />
+                          <Text style={styles.vendorOptionText}>
+                            {language === 'hi' ? 'नया विक्रेता' : 'New Vendor'}
+                          </Text>
+                          <Text style={styles.vendorOptionSubtext}>
+                            {language === 'hi' ? 'नया खाता बनाएं' : 'Create new Khata'}
+                          </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.vendorOptionBtn}
+                          onPress={() => setVendorSelectionMode('existing')}
+                        >
+                          <Ionicons name="search" size={28} color="#1976D2" />
+                          <Text style={styles.vendorOptionText}>
+                            {language === 'hi' ? 'मौजूदा विक्रेता' : 'Existing Vendor'}
+                          </Text>
+                          <Text style={styles.vendorOptionSubtext}>
+                            {language === 'hi' ? 'नाम/मोबाइल से खोजें' : 'Search by name/mobile'}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  )}
+
+                  {/* New Vendor Form */}
+                  {vendorSelectionMode === 'new' && (
+                    <View style={styles.vendorFormContainer}>
+                      <View style={styles.vendorFormHeader}>
+                        <TouchableOpacity onPress={() => setVendorSelectionMode('select')}>
+                          <Ionicons name="arrow-back" size={24} color="#333" />
+                        </TouchableOpacity>
+                        <Text style={styles.vendorFormTitle}>
+                          {language === 'hi' ? 'नया विक्रेता जोड़ें' : 'Add New Vendor'}
+                        </Text>
+                      </View>
+                      <Input
+                        label={`${language === 'hi' ? 'विक्रेता का नाम' : 'Vendor Name'} *`}
+                        placeholder={language === 'hi' ? 'नाम दर्ज करें' : 'Enter name'}
+                        value={newVendorData.name}
+                        onChangeText={(val) => setNewVendorData({ ...newVendorData, name: val })}
+                      />
+                      <Input
+                        label={language === 'hi' ? 'मोबाइल' : 'Mobile'}
+                        placeholder={language === 'hi' ? 'मोबाइल नंबर' : 'Mobile number'}
+                        value={newVendorData.mobile}
+                        onChangeText={(val) => setNewVendorData({ ...newVendorData, mobile: val })}
+                        keyboardType="phone-pad"
+                      />
+                      <Input
+                        label={language === 'hi' ? 'पता' : 'Address'}
+                        placeholder={language === 'hi' ? 'पता दर्ज करें' : 'Enter address'}
+                        value={newVendorData.address}
+                        onChangeText={(val) => setNewVendorData({ ...newVendorData, address: val })}
+                      />
+                      <Button
+                        title={language === 'hi' ? 'विक्रेता जोड़ें और खाता बनाएं' : 'Add Vendor & Create Khata'}
+                        onPress={handleCreateNewVendor}
+                        loading={creatingVendor}
+                        style={styles.createVendorBtn}
+                      />
+                    </View>
+                  )}
+
+                  {/* Existing Vendor Search */}
+                  {vendorSelectionMode === 'existing' && (
+                    <View style={styles.vendorFormContainer}>
+                      <View style={styles.vendorFormHeader}>
+                        <TouchableOpacity onPress={() => setVendorSelectionMode('select')}>
+                          <Ionicons name="arrow-back" size={24} color="#333" />
+                        </TouchableOpacity>
+                        <Text style={styles.vendorFormTitle}>
+                          {language === 'hi' ? 'विक्रेता खोजें' : 'Search Vendor'}
+                        </Text>
+                      </View>
+                      <View style={styles.searchBox}>
+                        <Ionicons name="search" size={18} color="#999" />
+                        <TextInput
+                          style={styles.searchInput}
+                          placeholder={language === 'hi' ? 'नाम या मोबाइल दर्ज करें' : 'Enter name or mobile'}
+                          value={vendorSearch}
+                          onChangeText={(val) => {
+                            setVendorSearch(val);
+                            searchVendors(val);
+                          }}
+                          placeholderTextColor="#999"
+                        />
+                      </View>
+                      
+                      {searchingVendors && (
+                        <Text style={styles.searchingText}>
+                          {language === 'hi' ? 'खोज रहे हैं...' : 'Searching...'}
+                        </Text>
+                      )}
+                      
+                      {vendorSearchResults.length > 0 && (
+                        <View style={styles.searchResultsContainer}>
+                          <Text style={styles.searchResultsTitle}>
+                            {language === 'hi' ? 'परिणाम:' : 'Results:'}
+                          </Text>
+                          {vendorSearchResults.map(vendor => (
+                            <TouchableOpacity
+                              key={vendor.id}
+                              style={styles.searchResultItem}
+                              onPress={() => handleSelectExistingVendor(vendor)}
+                            >
+                              <View style={styles.searchResultInfo}>
+                                <Text style={styles.searchResultName}>{vendor.name}</Text>
+                                {vendor.mobile && (
+                                  <Text style={styles.searchResultMobile}>
+                                    <Ionicons name="call-outline" size={12} color="#666" /> {vendor.mobile}
+                                  </Text>
+                                )}
+                                {vendor.address && (
+                                  <Text style={styles.searchResultAddress}>
+                                    <Ionicons name="location-outline" size={12} color="#666" /> {vendor.address}
+                                  </Text>
+                                )}
+                              </View>
+                              <View style={styles.searchResultAction}>
+                                <Ionicons name="chevron-forward" size={20} color="#7B1FA2" />
+                              </View>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      )}
+                      
+                      {vendorSearch.length >= 2 && vendorSearchResults.length === 0 && !searchingVendors && (
+                        <View style={styles.noResultsContainer}>
+                          <Text style={styles.noResultsText}>
+                            {language === 'hi' ? 'कोई विक्रेता नहीं मिला' : 'No vendor found'}
+                          </Text>
+                          <Button
+                            title={language === 'hi' ? 'नया विक्रेता बनाएं' : 'Create New Vendor'}
+                            onPress={() => {
+                              setNewVendorData({ ...newVendorData, name: vendorSearch });
+                              setVendorSelectionMode('new');
+                            }}
+                            variant="outline"
+                            style={styles.createNewFromSearchBtn}
+                          />
+                        </View>
+                      )}
+                    </View>
+                  )}
+
+                  {/* Confirmed Vendor Display */}
+                  {vendorSelectionMode === 'confirmed' && confirmedVendor && (
+                    <View style={styles.confirmedVendorContainer}>
+                      <View style={styles.confirmedVendorInfo}>
+                        <Ionicons name="checkmark-circle" size={24} color="#7B1FA2" />
+                        <View style={styles.confirmedVendorDetails}>
+                          <Text style={styles.confirmedVendorName}>{confirmedVendor.name}</Text>
+                          {confirmedVendor.mobile && (
+                            <Text style={styles.confirmedVendorMobile}>{confirmedVendor.mobile}</Text>
+                          )}
+                          {(confirmedVendor.outstanding_dues || 0) > 0 && (
+                            <Text style={styles.confirmedVendorDue}>
+                              {language === 'hi' ? 'देय:' : 'Due:'} ₹{confirmedVendor.outstanding_dues?.toLocaleString('en-IN')}
+                            </Text>
+                          )}
+                        </View>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.changeVendorBtn}
+                        onPress={resetVendorSelection}
+                      >
+                        <Text style={styles.changeVendorText}>
+                          {language === 'hi' ? 'बदलें' : 'Change'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
                 </>
               )}
 
@@ -780,4 +1079,171 @@ const styles = StyleSheet.create({
   modeText: { fontSize: 13, color: '#666', fontWeight: '500' },
   modeTextActive: { color: '#FFF' },
   submitBtn: { marginTop: 20 },
+  // Vendor Selection Flow Styles
+  vendorSelectionContainer: {
+    backgroundColor: '#FFF',
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 8,
+    borderWidth: 2,
+    borderColor: '#7B1FA2',
+    borderStyle: 'dashed',
+  },
+  vendorSelectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#7B1FA2',
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  vendorSelectionOptions: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    gap: 12,
+  },
+  vendorOptionBtn: {
+    flex: 1,
+    backgroundColor: '#F5F5F5',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  vendorOptionText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginTop: 8,
+  },
+  vendorOptionSubtext: {
+    fontSize: 11,
+    color: '#666',
+    marginTop: 4,
+  },
+  vendorFormContainer: {
+    backgroundColor: '#FFF',
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 8,
+  },
+  vendorFormHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+    gap: 12,
+  },
+  vendorFormTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+  },
+  createVendorBtn: {
+    marginTop: 16,
+    backgroundColor: '#7B1FA2',
+  },
+  searchingText: {
+    textAlign: 'center',
+    color: '#666',
+    marginTop: 12,
+  },
+  searchResultsContainer: {
+    marginTop: 16,
+  },
+  searchResultsTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+  },
+  searchResultItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  searchResultInfo: {
+    flex: 1,
+  },
+  searchResultName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#333',
+  },
+  searchResultMobile: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 2,
+  },
+  searchResultAddress: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 2,
+  },
+  searchResultAction: {
+    padding: 4,
+  },
+  noResultsContainer: {
+    alignItems: 'center',
+    marginTop: 24,
+  },
+  noResultsText: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 12,
+  },
+  createNewFromSearchBtn: {
+    marginTop: 8,
+  },
+  confirmedVendorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F3E5F5',
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#7B1FA2',
+  },
+  confirmedVendorInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    gap: 12,
+  },
+  confirmedVendorDetails: {
+    flex: 1,
+  },
+  confirmedVendorName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+  },
+  confirmedVendorMobile: {
+    fontSize: 13,
+    color: '#666',
+    marginTop: 2,
+  },
+  confirmedVendorDue: {
+    fontSize: 12,
+    color: '#E65100',
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  changeVendorBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: '#FFF',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#7B1FA2',
+  },
+  changeVendorText: {
+    fontSize: 13,
+    color: '#7B1FA2',
+    fontWeight: '600',
+  },
 });

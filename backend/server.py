@@ -309,6 +309,7 @@ class VendorBase(BaseModel):
     name: str
     mobile: Optional[str] = None
     address: Optional[str] = None
+    village: Optional[str] = None
     products: List[str] = []
     is_active: bool = True
 
@@ -320,8 +321,22 @@ class Vendor(VendorBase):
     total_purchases: float = 0
     total_paid: float = 0
     outstanding_dues: float = 0
+    transaction_count: int = 0
+    last_transaction_date: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+# Vendor Payment Model
+class VendorPaymentCreate(BaseModel):
+    vendor_id: str
+    amount: float
+    payment_mode: str = "cash"  # cash, online
+    notes: Optional[str] = None
+
+class VendorPayment(VendorPaymentCreate):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    created_by: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
 # Vendor Procurement Model
 class VendorProcurementBase(BaseModel):
@@ -2079,20 +2094,86 @@ async def record_farmer_payment(payment: FarmerPaymentCreate, current_user: dict
     
     return {"message": "Payment recorded successfully"}
 
-# ===================== VENDOR ROUTES =====================
+# ===================== VENDOR ROUTES (KHATA/LEDGER SYSTEM) =====================
 
 @api_router.post("/vendors", response_model=Vendor)
-async def create_vendor(vendor: VendorCreate, current_user: dict = Depends(require_admin)):
-    """Create a new vendor"""
+async def create_vendor(vendor: VendorCreate, current_user: dict = Depends(get_current_user)):
+    """Create a new vendor with auto-ledger creation"""
     vendor_obj = Vendor(**vendor.dict())
     await db.vendors.insert_one(vendor_obj.dict())
     return vendor_obj
 
 @api_router.get("/vendors", response_model=List[Vendor])
-async def get_vendors(current_user: dict = Depends(get_current_user)):
-    """Get all active vendors"""
-    vendors = await db.vendors.find({"is_active": True}).to_list(1000)
+async def get_vendors(
+    search: Optional[str] = None,
+    has_dues: Optional[bool] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get vendors with search and filter support"""
+    query = {"is_active": True}
+    
+    # Search by name, mobile, or village (case-insensitive partial match)
+    if search:
+        import re
+        search_regex = re.compile(search, re.IGNORECASE)
+        query["$or"] = [
+            {"name": {"$regex": search_regex}},
+            {"mobile": {"$regex": search_regex}},
+            {"village": {"$regex": search_regex}}
+        ]
+    
+    # Filter vendors with outstanding dues
+    if has_dues:
+        query["outstanding_dues"] = {"$gt": 0}
+    
+    vendors = await db.vendors.find(query).sort("name", 1).to_list(1000)
     return [Vendor(**v) for v in vendors]
+
+@api_router.get("/vendors/search")
+async def search_vendors(
+    q: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Quick search endpoint for vendors - used in autocomplete"""
+    if not q or len(q) < 2:
+        return []
+    
+    import re
+    search_regex = re.compile(q, re.IGNORECASE)
+    query = {
+        "is_active": True,
+        "$or": [
+            {"name": {"$regex": search_regex}},
+            {"mobile": {"$regex": search_regex}},
+            {"village": {"$regex": search_regex}}
+        ]
+    }
+    
+    vendors = await db.vendors.find(query).limit(20).to_list(20)
+    return [{
+        "id": v["id"],
+        "name": v["name"],
+        "mobile": v.get("mobile", ""),
+        "address": v.get("address", ""),
+        "village": v.get("village", ""),
+        "outstanding_dues": v.get("outstanding_dues", 0)
+    } for v in vendors]
+
+@api_router.get("/vendors/with-dues")
+async def get_vendors_with_dues(current_user: dict = Depends(get_current_user)):
+    """Get all vendors with outstanding dues (for Khata overview)"""
+    vendors = await db.vendors.find({
+        "is_active": True,
+        "outstanding_dues": {"$gt": 0}
+    }).sort("outstanding_dues", -1).to_list(1000)
+    
+    total_dues = sum(v.get("outstanding_dues", 0) for v in vendors)
+    
+    return {
+        "vendors": [Vendor(**v) for v in vendors],
+        "total_dues": total_dues,
+        "count": len(vendors)
+    }
 
 @api_router.get("/vendors/{vendor_id}", response_model=Vendor)
 async def get_vendor(vendor_id: str, current_user: dict = Depends(get_current_user)):
@@ -2103,7 +2184,7 @@ async def get_vendor(vendor_id: str, current_user: dict = Depends(get_current_us
     return Vendor(**vendor)
 
 @api_router.put("/vendors/{vendor_id}")
-async def update_vendor(vendor_id: str, updates: dict, current_user: dict = Depends(require_admin)):
+async def update_vendor(vendor_id: str, updates: dict, current_user: dict = Depends(get_current_user)):
     """Update a vendor"""
     updates["updated_at"] = datetime.utcnow()
     result = await db.vendors.update_one({"id": vendor_id}, {"$set": updates})
@@ -2121,6 +2202,136 @@ async def delete_vendor(vendor_id: str, current_user: dict = Depends(require_adm
     if result.modified_count == 0:
         raise HTTPException(status_code=404, detail="Vendor not found")
     return {"message": "Vendor deactivated successfully"}
+
+@api_router.get("/vendors/{vendor_id}/ledger")
+async def get_vendor_ledger(
+    vendor_id: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get comprehensive vendor ledger (Khata) with all transactions"""
+    vendor = await db.vendors.find_one({"id": vendor_id})
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    
+    # Build date filter
+    date_filter = {}
+    if start_date:
+        date_filter["$gte"] = datetime.fromisoformat(start_date)
+    if end_date:
+        date_filter["$lte"] = datetime.fromisoformat(end_date)
+    
+    # Get purchases from this vendor
+    purchases_query = {"vendor_id": vendor_id}
+    if date_filter:
+        purchases_query["created_at"] = date_filter
+    
+    purchases_raw = await db.vendor_procurement.find(purchases_query).sort("created_at", -1).to_list(1000)
+    
+    # Get payments to this vendor
+    payments_query = {"vendor_id": vendor_id}
+    if date_filter:
+        payments_query["created_at"] = date_filter
+    
+    payments_raw = await db.vendor_payments.find(payments_query).sort("created_at", -1).to_list(1000)
+    
+    # Clean MongoDB _id from results
+    def clean_doc(doc):
+        doc.pop('_id', None)
+        return doc
+    
+    purchases = [clean_doc(p) for p in purchases_raw]
+    payments = [clean_doc(p) for p in payments_raw]
+    
+    # Calculate ledger summary
+    total_purchases = sum(p.get("total_amount", 0) for p in purchases)
+    total_credit_given = sum(p.get("credit_amount", 0) for p in purchases)
+    total_payments = sum(p.get("amount", 0) for p in payments)
+    
+    # Build transaction timeline (combined purchases and payments sorted by date)
+    transactions = []
+    for p in purchases:
+        transactions.append({
+            "id": p["id"],
+            "type": "purchase",
+            "date": p["created_at"],
+            "reference": p.get("receipt_number", ""),
+            "description": f"Purchase - {p.get('product_name', 'N/A')}",
+            "debit": p.get("credit_amount", 0),  # Credit amount adds to dues
+            "credit": 0,
+            "quantity": p.get("quantity", 0),
+            "rate": p.get("rate", 0),
+            "total_amount": p.get("total_amount", 0),
+            "payment_mode": p.get("payment_mode", "")
+        })
+    
+    for p in payments:
+        transactions.append({
+            "id": p["id"],
+            "type": "payment",
+            "date": p["created_at"],
+            "reference": "",
+            "description": f"Payment - {p.get('payment_mode', 'cash').upper()}",
+            "debit": 0,
+            "credit": p.get("amount", 0),  # Payment reduces dues
+            "payment_mode": p.get("payment_mode", "cash"),
+            "notes": p.get("notes", "")
+        })
+    
+    # Sort by date descending
+    transactions.sort(key=lambda x: x["date"], reverse=True)
+    
+    # Remove _id from vendor
+    vendor.pop('_id', None)
+    
+    return {
+        "vendor": Vendor(**vendor),
+        "transactions": transactions,
+        "summary": {
+            "total_transactions": len(purchases),
+            "total_purchases": total_purchases,
+            "total_credit_given": total_credit_given,
+            "total_payments": total_payments,
+            "outstanding_dues": vendor.get("outstanding_dues", 0)
+        },
+        "purchases": purchases,
+        "payments": payments
+    }
+
+@api_router.post("/vendors/payment")
+async def record_vendor_payment(payment: VendorPaymentCreate, current_user: dict = Depends(get_current_user)):
+    """Record a payment to vendor - adjusts dues automatically"""
+    vendor = await db.vendors.find_one({"id": payment.vendor_id})
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    
+    payment_obj = VendorPayment(
+        vendor_id=payment.vendor_id,
+        amount=payment.amount,
+        payment_mode=payment.payment_mode,
+        notes=payment.notes,
+        created_by=current_user["id"]
+    )
+    await db.vendor_payments.insert_one(payment_obj.dict())
+    
+    # Update vendor balance - auto-adjust dues
+    new_dues = max(0, vendor.get("outstanding_dues", 0) - payment.amount)
+    await db.vendors.update_one(
+        {"id": payment.vendor_id},
+        {
+            "$inc": {"total_paid": payment.amount},
+            "$set": {
+                "outstanding_dues": new_dues,
+                "updated_at": datetime.utcnow()
+            }
+        }
+    )
+    
+    return {
+        "message": "Payment recorded successfully",
+        "new_dues": new_dues
+    }
 
 # ===================== DASHBOARD & REPORTS =====================
 
@@ -2761,11 +2972,18 @@ async def create_vendor_procurement(procurement: VendorProcurementBase, current_
     if vendor_id != 'manual':
         await db.vendors.update_one(
             {"id": vendor_id},
-            {"$inc": {
-                "total_purchases": total_amount,
-                "total_paid": paid_amount,
-                "outstanding_dues": credit_amount
-            }, "$set": {"updated_at": datetime.utcnow()}}
+            {
+                "$inc": {
+                    "total_purchases": total_amount,
+                    "total_paid": paid_amount,
+                    "outstanding_dues": credit_amount,
+                    "transaction_count": 1
+                }, 
+                "$set": {
+                    "updated_at": datetime.utcnow(),
+                    "last_transaction_date": datetime.utcnow()
+                }
+            }
         )
     
     return {
