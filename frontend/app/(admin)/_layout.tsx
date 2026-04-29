@@ -117,6 +117,15 @@ export default function AdminLayout() {
         }}
       />
       <Tabs.Screen
+        name="khata"
+        options={{
+          title: language === 'hi' ? 'खाता' : 'Khata',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="book" size={size - 2} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="notifications"
         options={{
           title: language === 'hi' ? 'सूचनाएं' : 'Alerts',

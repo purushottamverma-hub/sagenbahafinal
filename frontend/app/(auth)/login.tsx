@@ -174,8 +174,8 @@ export default function LoginScreen() {
             <Text style={styles.title}>{t('appName')}</Text>
             <Text style={styles.subtitle}>
               {language === 'hi' 
-                ? 'सागेन बहा वूमेन फार्मर प्रोड्यूसर कंपनी लिमिटेड'
-                : 'Sagen Baha Women Farmer Producer Company Limited'
+                ? 'एफपीओ व्यापार प्रबंधन प्रणाली'
+                : 'FPO Business Management System'
               }
             </Text>
           </View>

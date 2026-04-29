@@ -1,7 +1,7 @@
 export const translations = {
   en: {
     // Common
-    appName: 'Sagen Baha FPO',
+    appName: 'FPO Business Transaction',
     loading: 'Loading...',
     save: 'Save',
     cancel: 'Cancel',
@@ -46,6 +46,8 @@ export const translations = {
     reports: 'Reports',
     settings: 'Settings',
     notifications: 'Notifications',
+    khata: 'Khata',
+    ledger: 'Ledger',
     
     // Dashboard
     todaySales: "Today's Sales",
@@ -95,7 +97,7 @@ export const translations = {
     fromOutlet: 'From Outlet',
     toOutlet: 'To Outlet',
     
-    // Customers
+    // Customers / Khata
     customerName: 'Customer Name',
     mobile: 'Mobile',
     address: 'Address',
@@ -106,6 +108,21 @@ export const translations = {
     outstandingBalance: 'Outstanding Balance',
     viewLedger: 'View Ledger',
     recordPayment: 'Record Payment',
+    customerType: 'Customer Type',
+    shareholder: 'Shareholder',
+    registered: 'Registered',
+    walkIn: 'Walk-in',
+    dues: 'Dues',
+    totalDues: 'Total Dues',
+    transactions: 'Transactions',
+    noCustomers: 'No customers found',
+    searchCustomer: 'Search by name, mobile or village',
+    withDues: 'With Dues Only',
+    allCustomers: 'All Customers',
+    transactionHistory: 'Transaction History',
+    paymentHistory: 'Payment History',
+    addCustomer: 'Add Customer',
+    customerDetails: 'Customer Details',
     
     // Farmers
     farmerName: 'Farmer Name',
@@ -155,7 +172,7 @@ export const translations = {
   },
   hi: {
     // Common
-    appName: 'सागेन बहा FPO',
+    appName: 'FPO व्यापार लेनदेन',
     loading: 'लोड हो रहा है...',
     save: 'सहेजें',
     cancel: 'रद्द करें',
@@ -200,6 +217,8 @@ export const translations = {
     reports: 'रिपोर्ट',
     settings: 'सेटिंग्स',
     notifications: 'सूचनाएं',
+    khata: 'खाता',
+    ledger: 'खाता बही',
     
     // Dashboard
     todaySales: 'आज की बिक्री',
@@ -249,7 +268,7 @@ export const translations = {
     fromOutlet: 'से आउटलेट',
     toOutlet: 'तक आउटलेट',
     
-    // Customers
+    // Customers / Khata
     customerName: 'ग्राहक का नाम',
     mobile: 'मोबाइल',
     address: 'पता',
@@ -260,6 +279,21 @@ export const translations = {
     outstandingBalance: 'बकाया राशि',
     viewLedger: 'खाता देखें',
     recordPayment: 'भुगतान दर्ज करें',
+    customerType: 'ग्राहक प्रकार',
+    shareholder: 'शेयरधारक',
+    registered: 'पंजीकृत',
+    walkIn: 'वॉक-इन',
+    dues: 'बकाया',
+    totalDues: 'कुल बकाया',
+    transactions: 'लेनदेन',
+    noCustomers: 'कोई ग्राहक नहीं मिला',
+    searchCustomer: 'नाम, मोबाइल या गाँव से खोजें',
+    withDues: 'केवल बकाया वाले',
+    allCustomers: 'सभी ग्राहक',
+    transactionHistory: 'लेनदेन इतिहास',
+    paymentHistory: 'भुगतान इतिहास',
+    addCustomer: 'ग्राहक जोड़ें',
+    customerDetails: 'ग्राहक विवरण',
     
     // Farmers
     farmerName: 'किसान का नाम',

@@ -11,7 +11,7 @@ from datetime import datetime
 import base64
 
 # Configuration
-BASE_URL = "https://harvest-hub-198.preview.emergentagent.com/api"
+BASE_URL = "https://fpo-offline-trade.preview.emergentagent.com/api"
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "admin123"
 

@@ -110,6 +110,18 @@ user_problem_statement: |
   - Bilingual (Hindi/English)
 
 backend:
+  - task: "Customer Ledger (Khata) System"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Enhanced Customer Ledger (Khata) System implemented. Features: 1) Enhanced Customer model with customer_type (walk_in/registered/shareholder), folio_number, transaction_count, last_transaction_date. 2) New search endpoint with partial/case-insensitive matching by name, mobile, village. 3) Filter by customer_type and has_dues. 4) Comprehensive ledger endpoint with transaction history, summary, sales, and payments. 5) Customer payment recording with auto-dues adjustment. 6) Shareholder upgrade endpoint. All endpoints tested via curl - working correctly."
+
   - task: "Shareholder Upgrade Feature"
     implemented: true
     working: true
@@ -334,6 +346,18 @@ frontend:
       - working: true
         agent: "main"
         comment: "Created shareholder approval screen for admin. Features: filter by status (pending/approved/rejected/all), view request details with certificate image, approve/reject with remarks. Verified via screenshots."
+
+  - task: "Customer Ledger (Khata) Screen"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/(admin)/khata.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Created Khata (Customer Ledger) screen for admin. Features: 1) Search customers by name/mobile/village with partial matching. 2) Filter by customers with dues only. 3) Total outstanding dues summary. 4) View detailed ledger with transaction history. 5) Record payments with auto-dues adjustment. 6) Add/Edit customers with customer type (walk_in/registered/shareholder). 7) Upgrade to shareholder with folio number."
 
 metadata:
   created_by: "main_agent"

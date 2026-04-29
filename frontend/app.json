@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "FPO Manager",
-    "slug": "fpo-manager",
+    "name": "FPO Business Transaction",
+    "slug": "fpo-business-transaction",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -35,13 +35,15 @@
           "resizeMode": "contain",
           "backgroundColor": "#2E7D32"
         }
-      ]
+      ],
+      "expo-font",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true
     },
     "extra": {
-      "expoHostname": "https://harvest-hub-198.preview.emergentagent.com"
+      "expoHostname": "https://fpo-offline-trade.preview.emergentagent.com"
     }
   }
 }

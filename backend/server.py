@@ -221,6 +221,9 @@ class CustomerBase(BaseModel):
     mobile: Optional[str] = None
     address: Optional[str] = None
     village: Optional[str] = None
+    customer_type: str = "walk_in"  # walk_in, registered, shareholder
+    linked_farmer_id: Optional[str] = None  # Link to farmer if customer is a farmer
+    folio_number: Optional[str] = None  # For shareholders
     is_active: bool = True
 
 class CustomerCreate(CustomerBase):
@@ -232,6 +235,8 @@ class Customer(CustomerBase):
     total_credit: float = 0
     total_paid: float = 0
     outstanding_balance: float = 0
+    transaction_count: int = 0  # Total number of transactions
+    last_transaction_date: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -1363,18 +1368,91 @@ async def reject_transfer_request(request_id: str, remark: str = "", current_use
     
     return {"message": "Transfer request rejected"}
 
-# ===================== CUSTOMER ROUTES =====================
+# ===================== CUSTOMER ROUTES (KHATA/LEDGER SYSTEM) =====================
 
 @api_router.post("/customers", response_model=Customer)
 async def create_customer(customer: CustomerCreate, current_user: dict = Depends(get_current_user)):
+    """Create a new customer with optional shareholder/farmer linking"""
     customer_obj = Customer(**customer.dict())
     await db.customers.insert_one(customer_obj.dict())
     return customer_obj
 
 @api_router.get("/customers", response_model=List[Customer])
-async def get_customers(current_user: dict = Depends(get_current_user)):
-    customers = await db.customers.find({"is_active": True}).to_list(1000)
+async def get_customers(
+    search: Optional[str] = None,
+    customer_type: Optional[str] = None,
+    has_dues: Optional[bool] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get customers with search and filter support"""
+    query = {"is_active": True}
+    
+    # Search by name, mobile, or village (case-insensitive partial match)
+    if search:
+        import re
+        search_regex = re.compile(search, re.IGNORECASE)
+        query["$or"] = [
+            {"name": {"$regex": search_regex}},
+            {"mobile": {"$regex": search_regex}},
+            {"village": {"$regex": search_regex}}
+        ]
+    
+    # Filter by customer type
+    if customer_type:
+        query["customer_type"] = customer_type
+    
+    # Filter customers with outstanding dues
+    if has_dues:
+        query["outstanding_balance"] = {"$gt": 0}
+    
+    customers = await db.customers.find(query).sort("name", 1).to_list(1000)
     return [Customer(**c) for c in customers]
+
+@api_router.get("/customers/search")
+async def search_customers(
+    q: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Quick search endpoint for customers - used in autocomplete"""
+    if not q or len(q) < 2:
+        return []
+    
+    import re
+    search_regex = re.compile(q, re.IGNORECASE)
+    query = {
+        "is_active": True,
+        "$or": [
+            {"name": {"$regex": search_regex}},
+            {"mobile": {"$regex": search_regex}},
+            {"village": {"$regex": search_regex}}
+        ]
+    }
+    
+    customers = await db.customers.find(query).limit(20).to_list(20)
+    return [{
+        "id": c["id"],
+        "name": c["name"],
+        "mobile": c.get("mobile", ""),
+        "village": c.get("village", ""),
+        "customer_type": c.get("customer_type", "walk_in"),
+        "outstanding_balance": c.get("outstanding_balance", 0)
+    } for c in customers]
+
+@api_router.get("/customers/with-dues")
+async def get_customers_with_dues(current_user: dict = Depends(get_current_user)):
+    """Get all customers with outstanding dues (for Khata overview)"""
+    customers = await db.customers.find({
+        "is_active": True,
+        "outstanding_balance": {"$gt": 0}
+    }).sort("outstanding_balance", -1).to_list(1000)
+    
+    total_dues = sum(c.get("outstanding_balance", 0) for c in customers)
+    
+    return {
+        "customers": [Customer(**c) for c in customers],
+        "total_dues": total_dues,
+        "count": len(customers)
+    }
 
 @api_router.get("/customers/{customer_id}", response_model=Customer)
 async def get_customer(customer_id: str, current_user: dict = Depends(get_current_user)):
@@ -1385,35 +1463,122 @@ async def get_customer(customer_id: str, current_user: dict = Depends(get_curren
 
 @api_router.put("/customers/{customer_id}")
 async def update_customer(customer_id: str, updates: dict, current_user: dict = Depends(get_current_user)):
+    """Update customer - including upgrading to shareholder"""
     updates["updated_at"] = datetime.utcnow()
     result = await db.customers.update_one({"id": customer_id}, {"$set": updates})
     if result.modified_count == 0:
         raise HTTPException(status_code=404, detail="Customer not found")
     return {"message": "Customer updated successfully"}
 
+@api_router.delete("/customers/{customer_id}")
+async def delete_customer(customer_id: str, current_user: dict = Depends(require_admin)):
+    """Soft delete a customer"""
+    result = await db.customers.update_one(
+        {"id": customer_id},
+        {"$set": {"is_active": False, "updated_at": datetime.utcnow()}}
+    )
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return {"message": "Customer deleted successfully"}
+
 @api_router.get("/customers/{customer_id}/ledger")
-async def get_customer_ledger(customer_id: str, current_user: dict = Depends(get_current_user)):
-    """Get customer ledger with all transactions"""
-    # Only admin can see full ledger
-    if current_user["role"] != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required for ledger")
-    
+async def get_customer_ledger(
+    customer_id: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get comprehensive customer ledger (Khata) with all transactions"""
     customer = await db.customers.find_one({"id": customer_id})
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
     
-    sales = await db.sales.find({"customer_id": customer_id}).sort("created_at", -1).to_list(1000)
-    payments = await db.customer_payments.find({"customer_id": customer_id}).sort("created_at", -1).to_list(1000)
+    # Build date filter
+    date_filter = {}
+    if start_date:
+        date_filter["$gte"] = datetime.fromisoformat(start_date)
+    if end_date:
+        date_filter["$lte"] = datetime.fromisoformat(end_date)
+    
+    # Get sales for this customer
+    sales_query = {"customer_id": customer_id}
+    if date_filter:
+        sales_query["created_at"] = date_filter
+    
+    sales_raw = await db.sales.find(sales_query).sort("created_at", -1).to_list(1000)
+    
+    # Get payments for this customer
+    payments_query = {"customer_id": customer_id}
+    if date_filter:
+        payments_query["created_at"] = date_filter
+    
+    payments_raw = await db.customer_payments.find(payments_query).sort("created_at", -1).to_list(1000)
+    
+    # Clean MongoDB _id from results
+    def clean_doc(doc):
+        doc.pop('_id', None)
+        return doc
+    
+    sales = [clean_doc(s) for s in sales_raw]
+    payments = [clean_doc(p) for p in payments_raw]
+    
+    # Calculate ledger summary
+    total_billed = sum(s.get("total_amount", 0) for s in sales)
+    total_credit_given = sum(s.get("credit_amount", 0) for s in sales)
+    total_payments = sum(p.get("amount", 0) for p in payments)
+    
+    # Build transaction timeline (combined sales and payments sorted by date)
+    transactions = []
+    for s in sales:
+        transactions.append({
+            "id": s["id"],
+            "type": "sale",
+            "date": s["created_at"],
+            "reference": s.get("bill_number", ""),
+            "description": f"Bill #{s.get('bill_number', 'N/A')}",
+            "debit": s.get("credit_amount", 0),  # Credit amount adds to dues
+            "credit": 0,
+            "items_count": len(s.get("items", [])),
+            "total_amount": s.get("total_amount", 0),
+            "payment_mode": s.get("payment_mode", "")
+        })
+    
+    for p in payments:
+        transactions.append({
+            "id": p["id"],
+            "type": "payment",
+            "date": p["created_at"],
+            "reference": "",
+            "description": f"Payment - {p.get('payment_mode', 'cash').upper()}",
+            "debit": 0,
+            "credit": p.get("amount", 0),  # Payment reduces dues
+            "payment_mode": p.get("payment_mode", "cash"),
+            "notes": p.get("notes", "")
+        })
+    
+    # Sort by date descending
+    transactions.sort(key=lambda x: x["date"], reverse=True)
+    
+    # Remove _id from customer
+    customer.pop('_id', None)
     
     return {
         "customer": Customer(**customer),
+        "transactions": transactions,
+        "summary": {
+            "total_transactions": len(sales),
+            "total_billed": total_billed,
+            "total_credit_given": total_credit_given,
+            "total_payments": total_payments,
+            "outstanding_balance": customer.get("outstanding_balance", 0)
+        },
         "sales": sales,
         "payments": payments
     }
 
 @api_router.post("/customers/payment")
 async def record_customer_payment(payment: CustomerPaymentCreate, current_user: dict = Depends(get_current_user)):
-    """Record a payment from customer"""
+    """Record a payment from customer - adjusts dues automatically"""
     customer = await db.customers.find_one({"id": payment.customer_id})
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
@@ -1427,16 +1592,45 @@ async def record_customer_payment(payment: CustomerPaymentCreate, current_user: 
     )
     await db.customer_payments.insert_one(payment_obj.dict())
     
-    # Update customer balance
+    # Update customer balance - auto-adjust dues
+    new_balance = max(0, customer.get("outstanding_balance", 0) - payment.amount)
     await db.customers.update_one(
         {"id": payment.customer_id},
-        {"$inc": {
-            "total_paid": payment.amount,
-            "outstanding_balance": -payment.amount
-        }, "$set": {"updated_at": datetime.utcnow()}}
+        {
+            "$inc": {"total_paid": payment.amount},
+            "$set": {
+                "outstanding_balance": new_balance,
+                "updated_at": datetime.utcnow()
+            }
+        }
     )
     
-    return {"message": "Payment recorded successfully"}
+    return {
+        "message": "Payment recorded successfully",
+        "new_balance": new_balance
+    }
+
+@api_router.put("/customers/{customer_id}/upgrade-shareholder")
+async def upgrade_customer_to_shareholder(
+    customer_id: str,
+    folio_number: str,
+    current_user: dict = Depends(require_admin)
+):
+    """Upgrade a customer to shareholder status"""
+    customer = await db.customers.find_one({"id": customer_id})
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    
+    await db.customers.update_one(
+        {"id": customer_id},
+        {"$set": {
+            "customer_type": "shareholder",
+            "folio_number": folio_number,
+            "updated_at": datetime.utcnow()
+        }}
+    )
+    
+    return {"message": "Customer upgraded to shareholder successfully"}
 
 # ===================== SALES ROUTES =====================
 
@@ -1498,16 +1692,24 @@ async def create_sale(sale: SaleCreate, current_user: dict = Depends(get_current
                 "total_purchases": sale.total_amount,
                 "total_credit": sale.credit_amount,
                 "total_paid": sale.cash_amount + sale.online_amount,
-                "outstanding_balance": sale.credit_amount
-            }, "$set": {"updated_at": datetime.utcnow()}}
+                "outstanding_balance": sale.credit_amount,
+                "transaction_count": 1
+            }, "$set": {
+                "updated_at": datetime.utcnow(),
+                "last_transaction_date": datetime.utcnow()
+            }}
         )
     elif sale.customer_id:
         await db.customers.update_one(
             {"id": sale.customer_id},
             {"$inc": {
                 "total_purchases": sale.total_amount,
-                "total_paid": sale.total_amount
-            }, "$set": {"updated_at": datetime.utcnow()}}
+                "total_paid": sale.total_amount,
+                "transaction_count": 1
+            }, "$set": {
+                "updated_at": datetime.utcnow(),
+                "last_transaction_date": datetime.utcnow()
+            }}
         )
     
     return sale_obj
