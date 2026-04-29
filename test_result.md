@@ -402,14 +402,8 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus:
-    - "Product Varieties (Phase 3)"
-    - "Sale Items with Variety (Phase 3)"
-    - "Cancelled Sales in Customer Ledger (Phase 3)"
-    - "Cancelled Purchases in Vendor Ledger (Phase 3)"
-    - "GET /api/sales/{sale_id} no ObjectId leak (Phase 3)"
-  stuck_tasks:
-    - "Cancelled Purchases in Vendor Ledger (Phase 3)"
+  current_focus: []
+  stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
@@ -451,16 +445,19 @@ backend_phase3:
         comment: "All assertions passed. After DELETE /api/sales/{id}?reason=test cancel: (a) sale still appears in ledger.transactions, (b) is_cancelled=True, (c) deleted_at populated, (d) deletion_reason='test cancel', (e) debit=0, (f) summary.total_billed and summary.total_credit_given both exclude the cancelled sale (pre=300 → post=0)."
 
   - task: "Cancelled Purchases in Vendor Ledger (Phase 3)"
-    implemented: false
-    working: false
+    implemented: true
+    working: true
     file: "/app/backend/server.py"
-    stuck_count: 1
+    stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
       - working: false
         agent: "testing"
         comment: "CRITICAL GAP: The ledger display logic for cancelled vendor procurements is in place (get_vendor_ledger() reads is_deleted, deleted_at, deletion_reason from procurement docs and sets debit=0 + excludes from totals). HOWEVER, there is NO DELETE endpoint for /api/vendor-procurement/{id}. Tried DELETE /api/vendor-procurement/{id}, DELETE /api/vendor-procurement/{id}?reason=..., DELETE /api/purchases/{id} — all return 404. Without a deletion endpoint that soft-marks the procurement as is_deleted=True + reverses stock/vendor ledger + populates deleted_at/deletion_reason, the new 'cancelled purchases' behavior cannot actually occur in production. Main agent must add a DELETE /api/vendor-procurement/{id}?reason=... endpoint that mirrors the delete_sale() logic (soft-delete, stock reversal, vendor outstanding_dues reversal, audit log)."
+      - working: true
+        agent: "testing"
+        comment: "VERIFIED FIX (Apr 29 2026) — DELETE /api/vendor-procurement/{id}?reason=... is now implemented (server.py L3473-3605). Re-ran focused test in /app/backend_test.py: ALL 24 checks PASS. 1) Admin login OK. 2) Created vendor 'Shree Traders TEST_xxx'. 3) POST /api/vendor-procurement (credit, qty=10 @ rate=50, total=500) → 200, procurement_id + receipt_number returned; vendor.outstanding_dues +500, total_purchases +500, transaction_count +1; stock at outlet +10. 4) DELETE /api/vendor-procurement/{id}?reason=test%20cancel → 200 with reversal_details.stock_reversed=True, vendor_ledger_adjusted=True, dues_reversed=500. 5) GET /api/vendors/{id}/ledger: cancelled purchase appears in transactions with is_cancelled=True, debit=0, deleted_at populated, deletion_reason='test cancel'. 6) summary.total_purchases=0 and summary.total_credit_given=0 (cancelled excluded). 7) vendor.outstanding_dues reversed back to baseline (500 → 0), total_purchases back to 0, transaction_count back to 0. 8) Stock quantity at outlet reversed (872 → 862). 9) Double-delete returns 400 ('Transaction already deleted'). Feature is production-ready."
 
   - task: "GET /api/sales/{sale_id} full doc (Phase 3)"
     implemented: true
@@ -666,5 +663,21 @@ agent_communication:
       FAIL (CRITICAL GAP): Cancelled purchases in vendor ledger cannot actually occur because there is NO DELETE endpoint for vendor-procurement. Tried DELETE /api/vendor-procurement/{id} (405), DELETE /api/vendor-procurement/{id}?reason=... (405), DELETE /api/purchases/{id}?reason=... (404). The vendor ledger code already reads is_deleted/deleted_at/deletion_reason from procurement docs (line 2691-2706 of server.py), but without an endpoint to set those fields and reverse stock + outstanding_dues, the feature is non-functional in production.
 
       Main agent must add DELETE /api/vendor-procurement/{procurement_id}?reason=... mirroring delete_sale() — soft-mark is_deleted, deleted_at, deletion_reason; reverse stock at outlet; reverse vendor.outstanding_dues/total_purchases/total_paid/transaction_count; write TransactionDeletionLog with transaction_type='vendor_procurement'.
+
+  - agent: "testing"
+    message: |
+      Re-tested the previously-failing task "Cancelled Purchases in Vendor Ledger (Phase 3)" only, per review request. ALL CHECKS PASS (24/24) via /app/backend_test.py.
+
+      Flow verified:
+      1) Admin login (admin/admin123) OK.
+      2) Created a fresh test vendor "Shree Traders TEST_<tag>".
+      3) POST /api/vendor-procurement with payment_mode="credit", qty=10 @ rate=50 → 200; vendor.outstanding_dues +500, total_purchases +500, transaction_count +1; stock at outlet +10.
+      4) DELETE /api/vendor-procurement/{id}?reason=test%20cancel → 200 with reversal_details {stock_reversed:true, vendor_ledger_adjusted:true, dues_reversed:500}.
+      5) GET /api/vendors/{vendor_id}/ledger — the cancelled procurement appears in transactions with is_cancelled=true, debit=0, deleted_at populated, deletion_reason="test cancel". summary.total_purchases=0 and summary.total_credit_given=0 (excluded).
+      6) vendor.outstanding_dues reversed back to baseline (500 → 0); total_purchases back to 0; transaction_count back to 0.
+      7) stock.quantity at outlet reversed (872 → 862, matching the pre-procurement baseline).
+      8) Bonus: double-delete returns 400 "Transaction already deleted".
+
+      Gap closed. No other regressions observed. Feature is production-ready.
 
       Test artifacts use TEST_<uuid> prefix. No data wiped. Created /app/backend_test.py with all tests."

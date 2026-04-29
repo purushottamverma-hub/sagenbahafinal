@@ -3470,6 +3470,138 @@ async def get_procurement_detail(procurement_id: str, current_user: dict = Depen
     procurement.pop('_id', None)
     return procurement
 
+
+@api_router.delete("/vendor-procurement/{procurement_id}")
+async def delete_vendor_procurement(
+    procurement_id: str,
+    reason: Optional[str] = None,
+    current_user: dict = Depends(require_admin)
+):
+    """
+    Delete a vendor procurement with automatic reversal of:
+    1. Inventory/Stock - subtract the received quantity from the outlet
+    2. Vendor Ledger - reverse outstanding_dues, totals, count
+    Constraints: admin only, 30-day limit, soft-delete with audit log.
+    """
+    procurement = await db.vendor_procurement.find_one({"id": procurement_id})
+    if not procurement:
+        raise HTTPException(status_code=404, detail="Procurement not found")
+
+    if procurement.get("is_deleted", False):
+        raise HTTPException(status_code=400, detail="Transaction already deleted")
+
+    proc_date = procurement.get("created_at")
+    if isinstance(proc_date, str):
+        proc_date = datetime.fromisoformat(proc_date)
+    days_old = (datetime.utcnow() - proc_date).days
+    if days_old > 30:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete transaction older than 30 days. This transaction is {days_old} days old."
+        )
+
+    reversal_details = {
+        "stock_reversed": False,
+        "vendor_ledger_adjusted": False,
+        "vendor_id": None,
+        "dues_reversed": 0,
+        "paid_amount_reversed": 0,
+    }
+
+    outlet_id = procurement.get("outlet_id")
+    product_id = procurement.get("product_id")
+    quantity = procurement.get("quantity", 0)
+
+    # 1. REVERSE STOCK (subtract received quantity at that outlet)
+    if product_id and product_id != "manual" and quantity > 0 and outlet_id:
+        stock = await db.stock.find_one({"outlet_id": outlet_id, "product_id": product_id})
+        if stock:
+            new_qty = max(0, (stock.get("quantity") or 0) - quantity)
+            new_received = max(0, (stock.get("stock_received") or 0) - quantity)
+            await db.stock.update_one(
+                {"id": stock["id"]},
+                {
+                    "$set": {
+                        "quantity": new_qty,
+                        "stock_received": new_received,
+                        "updated_at": datetime.utcnow(),
+                    }
+                },
+            )
+            reversal_details["stock_reversed"] = True
+
+    # 2. REVERSE VENDOR LEDGER
+    vendor_id = procurement.get("vendor_id")
+    total_amount = procurement.get("total_amount", 0)
+    credit_amount = procurement.get("credit_amount", 0)
+    cash_amount = procurement.get("cash_amount", 0)
+    online_amount = procurement.get("online_amount", 0)
+    paid_amount = cash_amount + online_amount
+
+    if vendor_id and vendor_id != "manual":
+        vendor = await db.vendors.find_one({"id": vendor_id})
+        if vendor:
+            update_ops = {
+                "$inc": {
+                    "total_purchases": -total_amount,
+                    "transaction_count": -1,
+                },
+                "$set": {"updated_at": datetime.utcnow()},
+            }
+            if credit_amount > 0:
+                update_ops["$inc"]["outstanding_dues"] = -credit_amount
+                reversal_details["dues_reversed"] = credit_amount
+            if paid_amount > 0:
+                update_ops["$inc"]["total_paid"] = -paid_amount
+                reversal_details["paid_amount_reversed"] = paid_amount
+            await db.vendors.update_one({"id": vendor_id}, update_ops)
+            reversal_details["vendor_ledger_adjusted"] = True
+            reversal_details["vendor_id"] = vendor_id
+
+    # 3. SOFT DELETE
+    await db.vendor_procurement.update_one(
+        {"id": procurement_id},
+        {
+            "$set": {
+                "is_deleted": True,
+                "deleted_at": datetime.utcnow(),
+                "deleted_by": current_user["id"],
+                "deletion_reason": reason,
+            }
+        },
+    )
+
+    # 4. AUDIT LOG
+    admin = await db.users.find_one({"id": current_user["id"]})
+    admin_name = admin.get("full_name", admin.get("username", "Admin")) if admin else "Admin"
+
+    procurement.pop("_id", None)
+    try:
+        audit_log = TransactionDeletionLog(
+            transaction_type="vendor_procurement",
+            transaction_id=procurement_id,
+            original_data=procurement,
+            bill_number=procurement.get("receipt_number"),
+            customer_id=vendor_id,
+            customer_name=procurement.get("vendor_name"),
+            total_amount=total_amount,
+            deleted_by=current_user["id"],
+            deleted_by_name=admin_name,
+            deletion_reason=reason,
+            reversal_details=reversal_details,
+        )
+        await db.transaction_deletion_logs.insert_one(audit_log.dict())
+    except Exception as e:
+        logging.error(f"Failed writing audit log for vendor procurement deletion: {e}")
+
+    return {
+        "message": "Vendor procurement deleted successfully",
+        "procurement_id": procurement_id,
+        "receipt_number": procurement.get("receipt_number"),
+        "reversal_details": reversal_details,
+    }
+
+
 # ===================== INITIALIZATION =====================
 
 @api_router.post("/init/setup")

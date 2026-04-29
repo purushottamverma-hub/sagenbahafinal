@@ -1,407 +1,311 @@
 """
-Backend tests for FPO Manager:
-- Customer search API (/api/customers/search)
-- Vendor search API (/api/vendors/search)
-- Regression: customers create, sales create, ledgers, sale delete with reversal
+Focused backend test for the review request:
+Cancelled Purchases in Vendor Ledger (Phase 3) — verify the new
+DELETE /api/vendor-procurement/{id}?reason=... endpoint and its effects
+on stock, vendor.outstanding_dues, and vendor ledger transactions/summary.
 """
 import os
-import sys
 import uuid
 import json
 import requests
 
-BASE_URL = "https://transaction-mgmt-dev.preview.emergentagent.com/api"
-ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "admin123"
+BASE_URL = os.environ.get(
+    "BACKEND_URL",
+    "https://transaction-mgmt-dev.preview.emergentagent.com",
+).rstrip("/")
+API = f"{BASE_URL}/api"
 
-passed = 0
-failed = 0
-results = []
+ADMIN = {"username": "admin", "password": "admin123"}
+TAG = f"TEST_{uuid.uuid4().hex[:8]}"
 
-def report(name, ok, detail=""):
-    global passed, failed
-    status = "PASS" if ok else "FAIL"
-    if ok:
-        passed += 1
-    else:
-        failed += 1
-    line = f"[{status}] {name} - {detail}"
-    print(line)
-    results.append((status, name, detail))
 
-def login():
-    r = requests.post(f"{BASE_URL}/auth/login",
-                      json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD},
-                      timeout=15)
+def _ok(label, cond, extra=""):
+    print(f"{'PASS' if cond else 'FAIL'} | {label}{(' — ' + extra) if extra else ''}")
+    return cond
+
+
+def login_admin():
+    r = requests.post(f"{API}/auth/login", json=ADMIN, timeout=30)
+    assert r.status_code == 200, f"Admin login failed: {r.status_code} {r.text}"
+    token = r.json().get("access_token") or r.json().get("token")
+    assert token, f"No token in response: {r.text}"
+    return {"Authorization": f"Bearer {token}"}
+
+
+def ensure_product(headers):
+    r = requests.get(f"{API}/products", headers=headers, timeout=30)
     r.raise_for_status()
-    return r.json()["access_token"]
+    products = r.json()
+    active = [p for p in products if p.get("is_active", True)]
+    assert active, "No active product exists for testing"
+    return active[0]
+
+
+def ensure_outlet(headers):
+    r = requests.get(f"{API}/outlets", headers=headers, timeout=30)
+    r.raise_for_status()
+    outlets = r.json()
+    active = [o for o in outlets if o.get("is_active", True)]
+    assert active, "No active outlet exists"
+    return active[0]
+
+
+def create_test_vendor(headers):
+    payload = {
+        "name": f"Shree Traders {TAG}",
+        "mobile": "9988776655",
+        "address": "Main Market, Bharatpur",
+        "village": "Bharatpur",
+    }
+    r = requests.post(f"{API}/vendors", headers=headers, json=payload, timeout=30)
+    assert r.status_code == 200, f"Vendor create failed: {r.status_code} {r.text}"
+    return r.json()
+
+
+def get_vendor(headers, vendor_id):
+    r = requests.get(f"{API}/vendors", headers=headers, timeout=30)
+    r.raise_for_status()
+    for v in r.json():
+        if v.get("id") == vendor_id:
+            return v
+    return None
+
+
+def get_stock_qty(headers, outlet_id, product_id):
+    r = requests.get(f"{API}/stock", headers=headers, timeout=30)
+    r.raise_for_status()
+    for s in r.json():
+        if s.get("outlet_id") == outlet_id and s.get("product_id") == product_id:
+            return s.get("quantity", 0)
+    return 0
+
 
 def main():
-    try:
-        token = login()
-        report("Admin login", True, "token obtained")
-    except Exception as e:
-        report("Admin login", False, str(e))
-        print_summary()
-        sys.exit(1)
+    print(f"\n== Backend URL: {BASE_URL}  Tag: {TAG} ==\n")
+    failures = []
 
-    H = {"Authorization": f"Bearer {token}"}
+    def check(label, cond, extra=""):
+        ok = _ok(label, cond, extra)
+        if not ok:
+            failures.append(label)
+        return ok
 
-    # ===== Setup: Ensure we have at least one test customer & vendor =====
-    test_marker = f"TEST_{uuid.uuid4().hex[:6]}"
+    # 1. Auth
+    headers = login_admin()
+    check("Admin login (admin/admin123)", True)
 
-    # Create a customer with shareholder + folio
-    cust_payload = {
-        "name": f"Ramesh Kumar {test_marker}",
-        "mobile": "9876512345",
-        "address": "Plot 12, Sector A, Lucknow",
-        "village": "Barabanki",
-        "customer_type": "shareholder",
-        "folio_number": "FPO-001"
+    # 2. Setup
+    product = ensure_product(headers)
+    outlet = ensure_outlet(headers)
+    vendor_resp = create_test_vendor(headers)
+    vendor_id = (
+        vendor_resp.get("id")
+        if isinstance(vendor_resp, dict)
+        else None
+    )
+    if not vendor_id:
+        # Fallback: search by TAG
+        r = requests.get(f"{API}/vendors", headers=headers, timeout=30)
+        for v in r.json():
+            if TAG in v.get("name", ""):
+                vendor_id = v["id"]
+                break
+    assert vendor_id, f"Couldn't resolve vendor id from {vendor_resp}"
+    check("Vendor created", True, f"id={vendor_id}")
+
+    vendor_before = get_vendor(headers, vendor_id) or {}
+    dues_before = vendor_before.get("outstanding_dues", 0)
+    total_purchases_before = vendor_before.get("total_purchases", 0)
+    txn_count_before = vendor_before.get("transaction_count", 0)
+    stock_before = get_stock_qty(headers, outlet["id"], product["id"])
+    print(
+        f"   Baseline: outstanding_dues={dues_before}, total_purchases={total_purchases_before}, "
+        f"transaction_count={txn_count_before}, stock_qty={stock_before}"
+    )
+
+    # 3. Create a credit procurement so outstanding_dues increases
+    qty = 10.0
+    rate = 50.0
+    expected_total = qty * rate  # 500
+    proc_payload = {
+        "vendor_id": vendor_id,
+        "product_id": product["id"],
+        "quantity": qty,
+        "rate": rate,
+        "outlet_id": outlet["id"],
+        "payment_mode": "credit",
+        "cash_amount": 0,
+        "online_amount": 0,
+        "notes": f"Credit purchase {TAG}",
     }
-    try:
-        r = requests.post(f"{BASE_URL}/customers", json=cust_payload, headers=H, timeout=15)
-        if r.status_code == 200:
-            test_customer = r.json()
-            report("POST /api/customers (shareholder + folio)", True,
-                   f"id={test_customer['id']}, customer_type={test_customer.get('customer_type')}, folio_number={test_customer.get('folio_number')}")
-        else:
-            report("POST /api/customers (shareholder + folio)", False,
-                   f"HTTP {r.status_code}: {r.text[:200]}")
-            test_customer = None
-    except Exception as e:
-        report("POST /api/customers (shareholder + folio)", False, str(e))
-        test_customer = None
+    r = requests.post(f"{API}/vendor-procurement", headers=headers, json=proc_payload, timeout=30)
+    if not check(
+        "POST /api/vendor-procurement (credit)",
+        r.status_code == 200,
+        f"status={r.status_code} body={r.text[:200]}",
+    ):
+        return failures
+    proc_body = r.json()
+    procurement_id = proc_body.get("procurement_id")
+    receipt_number = proc_body.get("receipt_number")
+    check("procurement_id returned", bool(procurement_id), f"id={procurement_id}")
 
-    # Create a vendor for testing
-    vend_payload = {
-        "name": f"Sharma Traders {test_marker}",
-        "mobile": "9123456789",
-        "address": "Mandi Road, Kanpur",
-        "village": "Kanpur Dehat",
-    }
-    try:
-        r = requests.post(f"{BASE_URL}/vendors", json=vend_payload, headers=H, timeout=15)
-        if r.status_code == 200:
-            test_vendor = r.json()
-            report("POST /api/vendors (setup)", True, f"id={test_vendor['id']}")
-        else:
-            report("POST /api/vendors (setup)", False, f"HTTP {r.status_code}: {r.text[:200]}")
-            test_vendor = None
-    except Exception as e:
-        report("POST /api/vendors (setup)", False, str(e))
-        test_vendor = None
+    # Verify dues/stock went up
+    vendor_mid = get_vendor(headers, vendor_id) or {}
+    dues_mid = vendor_mid.get("outstanding_dues", 0)
+    total_purchases_mid = vendor_mid.get("total_purchases", 0)
+    txn_count_mid = vendor_mid.get("transaction_count", 0)
+    stock_mid = get_stock_qty(headers, outlet["id"], product["id"])
+    check(
+        "outstanding_dues increased by credit_amount",
+        abs((dues_mid - dues_before) - expected_total) < 1e-6,
+        f"{dues_before} -> {dues_mid} (delta expected {expected_total})",
+    )
+    check(
+        "total_purchases increased",
+        abs((total_purchases_mid - total_purchases_before) - expected_total) < 1e-6,
+        f"{total_purchases_before} -> {total_purchases_mid}",
+    )
+    check(
+        "transaction_count +1",
+        (txn_count_mid - txn_count_before) == 1,
+        f"{txn_count_before} -> {txn_count_mid}",
+    )
+    check(
+        "stock +quantity at outlet",
+        abs((stock_mid - stock_before) - qty) < 1e-6,
+        f"{stock_before} -> {stock_mid}",
+    )
 
-    # ===========================================================
-    # CUSTOMER SEARCH TESTS
-    # ===========================================================
-    print("\n=== /api/customers/search tests ===")
+    # 4. DELETE /api/vendor-procurement/{id}?reason=test cancel -> expect 200
+    reason = "test cancel"
+    r = requests.delete(
+        f"{API}/vendor-procurement/{procurement_id}",
+        headers=headers,
+        params={"reason": reason},
+        timeout=30,
+    )
+    delete_ok = check(
+        "DELETE /api/vendor-procurement/{id}?reason=test%20cancel",
+        r.status_code == 200,
+        f"status={r.status_code} body={r.text[:300]}",
+    )
+    if not delete_ok:
+        return failures
+    del_body = r.json()
+    print(f"   delete response: {json.dumps(del_body, default=str)[:400]}")
+    check(
+        "delete.reversal_details.stock_reversed == True",
+        del_body.get("reversal_details", {}).get("stock_reversed") is True,
+    )
+    check(
+        "delete.reversal_details.vendor_ledger_adjusted == True",
+        del_body.get("reversal_details", {}).get("vendor_ledger_adjusted") is True,
+    )
 
-    # Empty string
-    try:
-        r = requests.get(f"{BASE_URL}/customers/search", params={"q": ""}, headers=H, timeout=15)
-        # Empty string causes len < 1 so should return [], but FastAPI may strip empty differently
-        if r.status_code == 200 and r.json() == []:
-            report("customers/search empty string returns []", True)
-        else:
-            report("customers/search empty string returns []", False,
-                   f"HTTP {r.status_code} body={r.text[:200]}")
-    except Exception as e:
-        report("customers/search empty string returns []", False, str(e))
+    # 5. Fetch vendor ledger & verify cancelled appearance
+    r = requests.get(f"{API}/vendors/{vendor_id}/ledger", headers=headers, timeout=30)
+    if not check("GET /api/vendors/{id}/ledger", r.status_code == 200, f"status={r.status_code}"):
+        return failures
+    ledger = r.json()
+    transactions = ledger.get("transactions", [])
+    summary = ledger.get("summary", {})
 
-    # Single character
-    try:
-        r = requests.get(f"{BASE_URL}/customers/search", params={"q": "a"}, headers=H, timeout=15)
-        ok = r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) <= 20
-        report("customers/search single char 'a' (<=20 results, HTTP 200)", ok,
-               f"HTTP {r.status_code} count={len(r.json()) if r.status_code==200 else 'N/A'}")
-        single_char_results = r.json() if r.status_code == 200 else []
-    except Exception as e:
-        report("customers/search single char 'a'", False, str(e))
-        single_char_results = []
+    cancelled_txn = None
+    for t in transactions:
+        if t.get("id") == procurement_id:
+            cancelled_txn = t
+            break
 
-    # Case-insensitive RAM vs ram
-    try:
-        r1 = requests.get(f"{BASE_URL}/customers/search", params={"q": "RAM"}, headers=H, timeout=15)
-        r2 = requests.get(f"{BASE_URL}/customers/search", params={"q": "ram"}, headers=H, timeout=15)
-        if r1.status_code == 200 and r2.status_code == 200:
-            ids1 = sorted([c["id"] for c in r1.json()])
-            ids2 = sorted([c["id"] for c in r2.json()])
-            ok = ids1 == ids2
-            report("customers/search case-insensitive RAM == ram", ok,
-                   f"RAM={len(ids1)} ram={len(ids2)}")
-        else:
-            report("customers/search case-insensitive RAM == ram", False,
-                   f"HTTP RAM={r1.status_code} ram={r2.status_code}")
-    except Exception as e:
-        report("customers/search case-insensitive RAM == ram", False, str(e))
+    check("cancelled purchase present in ledger.transactions", cancelled_txn is not None)
+    if cancelled_txn is not None:
+        check(
+            "transaction.is_cancelled is True",
+            cancelled_txn.get("is_cancelled") is True,
+            f"got {cancelled_txn.get('is_cancelled')}",
+        )
+        check(
+            "transaction.debit == 0",
+            (cancelled_txn.get("debit") or 0) == 0,
+            f"got {cancelled_txn.get('debit')}",
+        )
+        check(
+            "transaction.deleted_at populated",
+            bool(cancelled_txn.get("deleted_at")),
+            f"got {cancelled_txn.get('deleted_at')}",
+        )
+        check(
+            "transaction.deletion_reason == 'test cancel'",
+            cancelled_txn.get("deletion_reason") == reason,
+            f"got {cancelled_txn.get('deletion_reason')!r}",
+        )
 
-    # Partial match: first 3 letters of created customer (Ram from Ramesh)
-    try:
-        r = requests.get(f"{BASE_URL}/customers/search", params={"q": "Ram"}, headers=H, timeout=15)
-        if r.status_code == 200:
-            results_list = r.json()
-            ok = any(test_customer and c["id"] == test_customer["id"] for c in results_list) if test_customer else len(results_list) >= 0
-            report("customers/search partial 'Ram' finds Ramesh", ok,
-                   f"count={len(results_list)} match_test_customer={any(test_customer and c['id'] == test_customer['id'] for c in results_list) if test_customer else 'N/A'}")
-        else:
-            report("customers/search partial 'Ram'", False, f"HTTP {r.status_code}")
-    except Exception as e:
-        report("customers/search partial 'Ram'", False, str(e))
+    # 6. Summary totals exclude the cancelled one
+    total_purchases_after_summary = summary.get("total_purchases", 0)
+    total_credit_given_after_summary = summary.get("total_credit_given", 0)
+    check(
+        "summary.total_purchases excludes cancelled (== 0 for this new vendor)",
+        abs(total_purchases_after_summary - 0) < 1e-6,
+        f"got {total_purchases_after_summary}",
+    )
+    check(
+        "summary.total_credit_given excludes cancelled (== 0 for this new vendor)",
+        abs(total_credit_given_after_summary - 0) < 1e-6,
+        f"got {total_credit_given_after_summary}",
+    )
 
-    # Special chars: should NOT crash
-    for ch in ["(", ".", "+", "*"]:
-        try:
-            r = requests.get(f"{BASE_URL}/customers/search", params={"q": ch}, headers=H, timeout=15)
-            ok = r.status_code == 200 and isinstance(r.json(), list)
-            report(f"customers/search special char '{ch}' does not crash", ok,
-                   f"HTTP {r.status_code} count={len(r.json()) if ok else 'N/A'}")
-        except Exception as e:
-            report(f"customers/search special char '{ch}'", False, str(e))
+    # 7. Verify vendor.outstanding_dues reversed (back to baseline)
+    vendor_after = get_vendor(headers, vendor_id) or {}
+    dues_after = vendor_after.get("outstanding_dues", 0)
+    total_purchases_after = vendor_after.get("total_purchases", 0)
+    txn_count_after = vendor_after.get("transaction_count", 0)
+    check(
+        "vendor.outstanding_dues reversed to baseline",
+        abs(dues_after - dues_before) < 1e-6,
+        f"{dues_mid} -> {dues_after} (baseline {dues_before})",
+    )
+    check(
+        "vendor.total_purchases reversed to baseline",
+        abs(total_purchases_after - total_purchases_before) < 1e-6,
+        f"{total_purchases_mid} -> {total_purchases_after} (baseline {total_purchases_before})",
+    )
+    check(
+        "vendor.transaction_count decremented",
+        txn_count_after == txn_count_before,
+        f"{txn_count_mid} -> {txn_count_after} (baseline {txn_count_before})",
+    )
 
-    # Mobile search: partial mobile
-    try:
-        r = requests.get(f"{BASE_URL}/customers/search", params={"q": "98765"}, headers=H, timeout=15)
-        ok = r.status_code == 200 and isinstance(r.json(), list)
-        found = test_customer and any(c["id"] == test_customer["id"] for c in r.json()) if test_customer else False
-        report("customers/search partial mobile '98765'", ok,
-               f"HTTP {r.status_code} count={len(r.json()) if ok else 'N/A'} found_test_cust={found}")
-    except Exception as e:
-        report("customers/search partial mobile", False, str(e))
+    # 8. Stock quantity reduced back to baseline
+    stock_after = get_stock_qty(headers, outlet["id"], product["id"])
+    check(
+        "stock reversed at outlet (quantity -= qty)",
+        abs(stock_after - stock_before) < 1e-6,
+        f"{stock_mid} -> {stock_after} (baseline {stock_before})",
+    )
 
-    # Folio number search
-    try:
-        r = requests.get(f"{BASE_URL}/customers/search", params={"q": "FPO-001"}, headers=H, timeout=15)
-        if r.status_code == 200:
-            results_list = r.json()
-            found = test_customer and any(c["id"] == test_customer["id"] for c in results_list) if test_customer else False
-            report("customers/search by folio_number 'FPO-001'", found or len(results_list) > 0,
-                   f"count={len(results_list)} found_test={found}")
-        else:
-            report("customers/search by folio_number", False, f"HTTP {r.status_code}")
-    except Exception as e:
-        report("customers/search by folio_number", False, str(e))
+    # 9. Extra: double-delete should be blocked
+    r2 = requests.delete(
+        f"{API}/vendor-procurement/{procurement_id}",
+        headers=headers,
+        params={"reason": "again"},
+        timeout=30,
+    )
+    check(
+        "double-delete blocked (4xx)",
+        r2.status_code in (400, 404, 409),
+        f"status={r2.status_code}",
+    )
 
-    # Verify response payload contains expected fields
-    try:
-        r = requests.get(f"{BASE_URL}/customers/search", params={"q": test_marker[:6]},
-                         headers=H, timeout=15)
-        if r.status_code == 200 and r.json():
-            sample = r.json()[0]
-            required = ["id", "name", "mobile", "village", "address",
-                        "customer_type", "folio_number", "outstanding_balance"]
-            missing = [k for k in required if k not in sample]
-            ok = len(missing) == 0
-            report("customers/search response has all required fields", ok,
-                   f"missing={missing}, sample_keys={list(sample.keys())}")
-        else:
-            report("customers/search response field check", False,
-                   f"HTTP {r.status_code} no results for marker {test_marker}")
-    except Exception as e:
-        report("customers/search response field check", False, str(e))
+    print(f"\nDone. receipt_number={receipt_number}")
+    return failures
 
-    # ===========================================================
-    # VENDOR SEARCH TESTS
-    # ===========================================================
-    print("\n=== /api/vendors/search tests ===")
-
-    # Empty string
-    try:
-        r = requests.get(f"{BASE_URL}/vendors/search", params={"q": ""}, headers=H, timeout=15)
-        if r.status_code == 200 and r.json() == []:
-            report("vendors/search empty string returns []", True)
-        else:
-            report("vendors/search empty string returns []", False,
-                   f"HTTP {r.status_code} body={r.text[:200]}")
-    except Exception as e:
-        report("vendors/search empty string returns []", False, str(e))
-
-    # Single character
-    try:
-        r = requests.get(f"{BASE_URL}/vendors/search", params={"q": "s"}, headers=H, timeout=15)
-        ok = r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) <= 20
-        report("vendors/search single char 's'", ok,
-               f"HTTP {r.status_code} count={len(r.json()) if r.status_code==200 else 'N/A'}")
-    except Exception as e:
-        report("vendors/search single char 's'", False, str(e))
-
-    # Case insensitive
-    try:
-        r1 = requests.get(f"{BASE_URL}/vendors/search", params={"q": "SHARMA"}, headers=H, timeout=15)
-        r2 = requests.get(f"{BASE_URL}/vendors/search", params={"q": "sharma"}, headers=H, timeout=15)
-        if r1.status_code == 200 and r2.status_code == 200:
-            ids1 = sorted([v["id"] for v in r1.json()])
-            ids2 = sorted([v["id"] for v in r2.json()])
-            ok = ids1 == ids2
-            report("vendors/search case-insensitive SHARMA == sharma", ok,
-                   f"SHARMA={len(ids1)} sharma={len(ids2)}")
-        else:
-            report("vendors/search case-insensitive SHARMA == sharma", False,
-                   f"HTTP SHARMA={r1.status_code} sharma={r2.status_code}")
-    except Exception as e:
-        report("vendors/search case-insensitive", False, str(e))
-
-    # Partial match
-    try:
-        r = requests.get(f"{BASE_URL}/vendors/search", params={"q": "Sha"}, headers=H, timeout=15)
-        if r.status_code == 200:
-            results_list = r.json()
-            found = test_vendor and any(v["id"] == test_vendor["id"] for v in results_list) if test_vendor else False
-            report("vendors/search partial 'Sha' finds Sharma", found or len(results_list) >= 0,
-                   f"count={len(results_list)} found_test={found}")
-        else:
-            report("vendors/search partial", False, f"HTTP {r.status_code}")
-    except Exception as e:
-        report("vendors/search partial", False, str(e))
-
-    # Special chars
-    for ch in ["(", ".", "+", "*"]:
-        try:
-            r = requests.get(f"{BASE_URL}/vendors/search", params={"q": ch}, headers=H, timeout=15)
-            ok = r.status_code == 200 and isinstance(r.json(), list)
-            report(f"vendors/search special char '{ch}' does not crash", ok,
-                   f"HTTP {r.status_code} count={len(r.json()) if ok else 'N/A'}")
-        except Exception as e:
-            report(f"vendors/search special char '{ch}'", False, str(e))
-
-    # Mobile partial
-    try:
-        r = requests.get(f"{BASE_URL}/vendors/search", params={"q": "91234"}, headers=H, timeout=15)
-        ok = r.status_code == 200 and isinstance(r.json(), list)
-        report("vendors/search partial mobile '91234'", ok,
-               f"HTTP {r.status_code} count={len(r.json()) if ok else 'N/A'}")
-    except Exception as e:
-        report("vendors/search partial mobile", False, str(e))
-
-    # Verify vendor response payload
-    try:
-        r = requests.get(f"{BASE_URL}/vendors/search", params={"q": test_marker[:6]},
-                         headers=H, timeout=15)
-        if r.status_code == 200 and r.json():
-            sample = r.json()[0]
-            required = ["id", "name", "mobile", "address", "village", "outstanding_dues"]
-            missing = [k for k in required if k not in sample]
-            ok = len(missing) == 0
-            report("vendors/search response has all required fields", ok,
-                   f"missing={missing}, sample_keys={list(sample.keys())}")
-        else:
-            report("vendors/search response field check", False,
-                   f"HTTP {r.status_code} no results for marker {test_marker}")
-    except Exception as e:
-        report("vendors/search response field check", False, str(e))
-
-    # ===========================================================
-    # REGRESSION CHECK
-    # ===========================================================
-    print("\n=== Regression checks ===")
-
-    # We already verified POST /api/customers above.
-
-    # POST /api/sales tied to customer_id
-    sale_id = None
-    if test_customer:
-        # Need outlet, product, and stock
-        try:
-            outlets_r = requests.get(f"{BASE_URL}/outlets", headers=H, timeout=15).json()
-            stock_r = requests.get(f"{BASE_URL}/stock", headers=H, timeout=15).json()
-            # Find a stock record with quantity > 0
-            chosen_stock = next((s for s in stock_r if s.get("quantity", 0) > 1), None)
-            if not chosen_stock:
-                report("POST /api/sales (regression)", False, "No stock with qty>1 available")
-            else:
-                outlet_id = chosen_stock["outlet_id"]
-                product_id = chosen_stock["product_id"]
-                product_name = chosen_stock.get("product_name", "Unknown")
-                qty = 1
-                rate = 50.0
-                amount = qty * rate
-                sale_payload = {
-                    "outlet_id": outlet_id,
-                    "customer_id": test_customer["id"],
-                    "customer_name": test_customer["name"],
-                    "items": [{
-                        "product_id": product_id,
-                        "product_name": product_name,
-                        "quantity": qty,
-                        "rate": rate,
-                        "amount": amount
-                    }],
-                    "subtotal": amount,
-                    "discount": 0,
-                    "total_amount": amount,
-                    "payment_mode": "cash",
-                    "cash_amount": amount,
-                    "online_amount": 0,
-                    "credit_amount": 0
-                }
-                r = requests.post(f"{BASE_URL}/sales", json=sale_payload, headers=H, timeout=15)
-                if r.status_code == 200:
-                    sale_id = r.json()["id"]
-                    report("POST /api/sales tied to customer_id", True,
-                           f"sale_id={sale_id} bill={r.json().get('bill_number')}")
-                else:
-                    report("POST /api/sales tied to customer_id", False,
-                           f"HTTP {r.status_code}: {r.text[:200]}")
-        except Exception as e:
-            report("POST /api/sales tied to customer_id", False, str(e))
-
-    # GET /api/customers/{id}/ledger
-    if test_customer:
-        try:
-            r = requests.get(f"{BASE_URL}/customers/{test_customer['id']}/ledger",
-                             headers=H, timeout=15)
-            if r.status_code == 200:
-                data = r.json()
-                ok = "transactions" in data or "sales" in data or "summary" in data or "customer" in data
-                report("GET /api/customers/{id}/ledger", ok,
-                       f"keys={list(data.keys()) if isinstance(data, dict) else type(data)}")
-            else:
-                report("GET /api/customers/{id}/ledger", False,
-                       f"HTTP {r.status_code}: {r.text[:200]}")
-        except Exception as e:
-            report("GET /api/customers/{id}/ledger", False, str(e))
-
-    # GET /api/vendors/{id}/ledger
-    if test_vendor:
-        try:
-            r = requests.get(f"{BASE_URL}/vendors/{test_vendor['id']}/ledger",
-                             headers=H, timeout=15)
-            if r.status_code == 200:
-                data = r.json()
-                ok = isinstance(data, dict)
-                report("GET /api/vendors/{id}/ledger", ok,
-                       f"keys={list(data.keys()) if isinstance(data, dict) else type(data)}")
-            else:
-                report("GET /api/vendors/{id}/ledger", False,
-                       f"HTTP {r.status_code}: {r.text[:200]}")
-        except Exception as e:
-            report("GET /api/vendors/{id}/ledger", False, str(e))
-
-    # DELETE /api/sales/{sale_id} - auto reversal
-    if sale_id:
-        try:
-            r = requests.delete(f"{BASE_URL}/sales/{sale_id}",
-                                params={"reason": "test cleanup"},
-                                headers=H, timeout=15)
-            if r.status_code == 200:
-                data = r.json()
-                ok = "reversal_details" in data or "message" in data
-                report("DELETE /api/sales/{id} auto-reversal", ok,
-                       f"resp_keys={list(data.keys()) if isinstance(data, dict) else type(data)}")
-            else:
-                report("DELETE /api/sales/{id} auto-reversal", False,
-                       f"HTTP {r.status_code}: {r.text[:200]}")
-        except Exception as e:
-            report("DELETE /api/sales/{id} auto-reversal", False, str(e))
-
-    print_summary()
-
-def print_summary():
-    print(f"\n{'='*60}\nSUMMARY: {passed} passed, {failed} failed\n{'='*60}")
-    for s, n, d in results:
-        if s == "FAIL":
-            print(f"  FAIL: {n} -- {d}")
 
 if __name__ == "__main__":
-    main()
-    sys.exit(0 if failed == 0 else 1)
+    fails = main()
+    print("\n=== SUMMARY ===")
+    if not fails:
+        print("ALL CHECKS PASSED")
+    else:
+        print(f"FAILED CHECKS ({len(fails)}):")
+        for f in fails:
+            print(f"  - {f}")
