@@ -24,6 +24,7 @@ interface Product {
   name: string;
   name_hi?: string;
   unit: string;
+  varieties?: Array<{ id?: string; name: string; name_hi?: string }>;
 }
 
 interface Outlet {
@@ -43,6 +44,7 @@ interface StockItem {
   stock_received: number;
   stock_sold: number;
   stock_damaged: number;
+  updated_at?: string;
 }
 
 interface ConsolidatedStock {
@@ -173,23 +175,40 @@ export default function StockScreen() {
 
   const filteredStock = React.useMemo(() => {
     let result = stock;
-    
+
     // Filter by outlet
     if (selectedOutlet !== 'all') {
       result = result.filter(s => s.outlet_id === selectedOutlet);
     }
-    
-    // Filter by product search
+
+    // Filter by search (matches product name EN + HI, outlet name, unit)
     if (productSearch.trim()) {
-      const query = productSearch.toLowerCase();
-      result = result.filter(s => 
-        s.product_name.toLowerCase().includes(query) ||
-        products.find(p => p.id === s.product_id)?.name_hi?.toLowerCase().includes(query)
-      );
+      const query = productSearch.toLowerCase().trim();
+      result = result.filter(s => {
+        const prod = products.find(p => p.id === s.product_id);
+        const candidates = [
+          s.product_name?.toLowerCase() || '',
+          prod?.name_hi?.toLowerCase() || '',
+          s.outlet_name?.toLowerCase() || '',
+          s.product_unit?.toLowerCase() || '',
+        ];
+        return candidates.some(c => c.includes(query));
+      });
     }
-    
+
     return result;
   }, [stock, selectedOutlet, productSearch, products]);
+
+  // Recently-received: stock_received bumped within last 24h (best-effort using updated_at)
+  const isRecentlyReceived = (item: StockItem) => {
+    if (!item.updated_at || !item.stock_received) return false;
+    try {
+      const ageHrs = (Date.now() - new Date(item.updated_at).getTime()) / (1000 * 60 * 60);
+      return ageHrs <= 24;
+    } catch {
+      return false;
+    }
+  };
 
   const handleAddStock = async () => {
     if (!addProduct || !addOutlet || !addQuantity) {
@@ -418,44 +437,62 @@ export default function StockScreen() {
     return labels[status]?.[language] || status;
   };
 
-  const renderStockItem = ({ item }: { item: StockItem }) => (
-    <Card>
-      <View style={styles.stockRow}>
-        <View style={styles.stockInfo}>
-          <Text style={styles.productName}>
-            {language === 'hi' ? products.find(p => p.id === item.product_id)?.name_hi || item.product_name : item.product_name}
-          </Text>
-          <Text style={styles.outletName}>{item.outlet_name}</Text>
+  const renderStockItem = ({ item }: { item: StockItem }) => {
+    const prod = products.find(p => p.id === item.product_id);
+    const primaryName = language === 'hi' ? (prod?.name_hi || item.product_name) : item.product_name;
+    const altName = language === 'hi' ? item.product_name : (prod?.name_hi || '');
+    const recent = isRecentlyReceived(item);
+    return (
+      <Card>
+        <View style={styles.stockRow}>
+          <View style={styles.stockInfo}>
+            <View style={styles.stockNameRow}>
+              <Ionicons name="cube" size={18} color="#2E7D32" />
+              <Text style={styles.productName} numberOfLines={2}>{primaryName}</Text>
+              {recent && (
+                <View style={styles.recentBadge}>
+                  <Ionicons name="arrow-up" size={10} color="#1B5E20" />
+                  <Text style={styles.recentBadgeText}>{language === 'hi' ? 'नई आपूर्ति' : 'New stock'}</Text>
+                </View>
+              )}
+            </View>
+            {altName ? <Text style={styles.altName}>{altName}</Text> : null}
+            <View style={styles.outletPill}>
+              <Ionicons name="business-outline" size={12} color="#1976D2" />
+              <Text style={styles.outletPillText}>{item.outlet_name || '—'}</Text>
+            </View>
+          </View>
+          <View style={styles.stockQty}>
+            <Text style={[
+              styles.qtyValue,
+              item.quantity < 10 && styles.lowStock,
+            ]}>
+              {item.quantity}
+            </Text>
+            <Text style={styles.qtyUnit}>{item.product_unit}</Text>
+          </View>
         </View>
-        <View style={styles.stockQty}>
-          <Text style={[
-            styles.qtyValue,
-            item.quantity < 10 && styles.lowStock
-          ]}>
-            {item.quantity} {item.product_unit}
-          </Text>
+        <View style={styles.stockDetails}>
+          <View style={styles.detailItem}>
+            <Text style={styles.detailLabel}>{t('openingStock')}</Text>
+            <Text style={styles.detailValue}>{item.opening_stock}</Text>
+          </View>
+          <View style={styles.detailItem}>
+            <Text style={styles.detailLabel}>{t('received')}</Text>
+            <Text style={[styles.detailValue, { color: '#4CAF50' }]}>+{item.stock_received}</Text>
+          </View>
+          <View style={styles.detailItem}>
+            <Text style={styles.detailLabel}>{t('sold')}</Text>
+            <Text style={[styles.detailValue, { color: '#2196F3' }]}>-{item.stock_sold}</Text>
+          </View>
+          <View style={styles.detailItem}>
+            <Text style={styles.detailLabel}>{t('damaged')}</Text>
+            <Text style={[styles.detailValue, { color: '#D32F2F' }]}>-{item.stock_damaged}</Text>
+          </View>
         </View>
-      </View>
-      <View style={styles.stockDetails}>
-        <View style={styles.detailItem}>
-          <Text style={styles.detailLabel}>{t('openingStock')}</Text>
-          <Text style={styles.detailValue}>{item.opening_stock}</Text>
-        </View>
-        <View style={styles.detailItem}>
-          <Text style={styles.detailLabel}>{t('received')}</Text>
-          <Text style={[styles.detailValue, { color: '#4CAF50' }]}>+{item.stock_received}</Text>
-        </View>
-        <View style={styles.detailItem}>
-          <Text style={styles.detailLabel}>{t('sold')}</Text>
-          <Text style={[styles.detailValue, { color: '#2196F3' }]}>-{item.stock_sold}</Text>
-        </View>
-        <View style={styles.detailItem}>
-          <Text style={styles.detailLabel}>{t('damaged')}</Text>
-          <Text style={[styles.detailValue, { color: '#D32F2F' }]}>-{item.stock_damaged}</Text>
-        </View>
-      </View>
-    </Card>
-  );
+      </Card>
+    );
+  };
 
   const renderTransferRequest = ({ item }: { item: TransferRequest }) => (
     <Card style={styles.requestCard}>
@@ -571,21 +608,34 @@ export default function StockScreen() {
         ))}
       </ScrollView>
 
-      {/* Product Search */}
+      {/* Product Search — prominent, also matches outlet name */}
       <View style={styles.searchContainer}>
-        <Ionicons name="search" size={20} color="#666" style={styles.searchIcon} />
+        <Ionicons name="search" size={20} color="#2E7D32" style={styles.searchIcon} />
         <TextInput
           style={styles.searchInput}
-          placeholder={language === 'hi' ? 'उत्पाद खोजें...' : 'Search products...'}
+          placeholder={language === 'hi' ? 'उत्पाद, आउटलेट या इकाई से खोजें…' : 'Search by product, outlet or unit…'}
           value={productSearch}
           onChangeText={setProductSearch}
           placeholderTextColor="#999"
+          autoCorrect={false}
+          autoCapitalize="none"
         />
         {productSearch.length > 0 && (
-          <TouchableOpacity onPress={() => setProductSearch('')}>
+          <TouchableOpacity onPress={() => setProductSearch('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
             <Ionicons name="close-circle" size={20} color="#999" />
           </TouchableOpacity>
         )}
+      </View>
+
+      {/* Result count line */}
+      <View style={styles.resultCountRow}>
+        <Text style={styles.resultCountText}>
+          {language === 'hi'
+            ? `${filteredStock.length} में से ${stock.length} रिकॉर्ड`
+            : `${filteredStock.length} of ${stock.length} records`}
+          {productSearch ? (language === 'hi' ? `  ·  खोज: "${productSearch}"` : `  ·  search: "${productSearch}"`) : ''}
+          {selectedOutlet !== 'all' ? `  ·  ${outlets.find(o => o.id === selectedOutlet)?.name || ''}` : ''}
+        </Text>
       </View>
 
       {/* Consolidated View */}
@@ -1001,10 +1051,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#FFF',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E0E0E0',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    marginHorizontal: 16,
+    marginTop: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#C8E6C9',
   },
   searchIcon: {
     marginRight: 8,
@@ -1012,8 +1065,64 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     height: 40,
-    fontSize: 16,
+    fontSize: 15,
     color: '#333',
+  },
+  resultCountRow: {
+    paddingHorizontal: 18,
+    paddingTop: 6,
+    paddingBottom: 4,
+  },
+  resultCountText: {
+    fontSize: 12,
+    color: '#666',
+  },
+  stockNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 2,
+  },
+  altName: {
+    fontSize: 13,
+    color: '#777',
+    marginBottom: 4,
+  },
+  outletPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: '#E3F2FD',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+    gap: 4,
+    marginTop: 4,
+  },
+  outletPillText: {
+    fontSize: 12,
+    color: '#1976D2',
+    fontWeight: '600',
+  },
+  qtyUnit: {
+    fontSize: 11,
+    color: '#666',
+    marginTop: 2,
+  },
+  recentBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#C8E6C9',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  recentBadgeText: {
+    fontSize: 10,
+    color: '#1B5E20',
+    fontWeight: '700',
   },
   consolidatedSection: {
     padding: 16,

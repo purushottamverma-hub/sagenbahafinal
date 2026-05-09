@@ -932,3 +932,24 @@ test_plan:
       Backend: 62/62 backend tests already passed for PUT /api/sales/{id} and PUT /api/vendor-procurement/{id} including reverse+reapply, rollback on insufficient stock, 400 for items=[], 404 for unknown id, 400 for deleted/cancelled, 30-day limit.
       Pending user verification: visual frontend test of (a) Edit Sale flow (open bill → Edit → modify qty → Save → verify ledger), (b) Edit Procurement flow (tap pencil on vendor card → modify items → Save), (c) Outlet card display improvements. Default is to NOT trigger the Expo testing agent automatically; ask user first.
 
+
+  - agent: "main"
+    message: |
+      Stock auto-update verification + Stock tab UX upgrade (Feb 2026 continuation).
+
+      [Backend audit] Confirmed stock IS automatically incremented at the directed outlet on EVERY procurement path:
+        - POST /api/vendor-procurement (legacy single-item)  → updates db.stock.quantity AND db.stock.stock_received per item.
+        - POST /api/vendor-procurement/bulk (multi-item cart) → loops items[], updates per item, logs StockMovement per item.
+        - POST /api/farmer-purchases (farmer produce) → updates stock at outlet_id.
+        - PUT  /api/sales/{id} and PUT /api/vendor-procurement/{id} (edit endpoints) reverse old stock and apply new stock atomically.
+      Tested earlier: 42/42 (bulk) + 62/62 (edit) backend assertions PASS. No backend changes in this iteration.
+
+      [Frontend] /app/frontend/app/(admin)/stock.tsx upgrade:
+        - Search box restyled: prominent green-bordered card with green search icon.
+        - Search now matches: product name (EN), product name_hi, outlet name, unit. Previously only EN+HI name.
+        - Result count line shows "X of Y records" + active search term + active outlet filter (so admin can confirm the filter).
+        - Stock card redesigned: cube icon, primary product name (lang-aware), secondary alt-name (other language) below, blue outlet pill with business icon, qty + unit on separate lines for clarity, "New stock" green badge if stock_received was bumped within last 24h.
+      No data wiped. Stock interface widened to include optional `updated_at` for the recent-receipt indicator.
+
+      User to verify: open Admin → Stock; record a new procurement at an outlet; observe quantity increment + "New stock" badge appearing within 24h. Search by typing product name (EN or HI) or outlet name.
+
