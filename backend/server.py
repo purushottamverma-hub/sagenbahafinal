@@ -2715,6 +2715,223 @@ async def global_search(
     }
 
 
+# ===================== REPORTS =====================
+
+@api_router.get("/reports/transactions")
+async def report_transactions(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    type: Optional[str] = "all",  # sale | purchase | all
+    customer_id: Optional[str] = None,
+    vendor_id: Optional[str] = None,
+    outlet_id: Optional[str] = None,
+    format: Optional[str] = "json",  # json | csv
+    include_deleted: bool = False,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Unified transaction report. Filters: date range, type, customer/vendor, outlet.
+    Output: JSON list or CSV stream.
+    Each row: date, time, type, ref, person_name, outlet, product, variety, qty, rate, total, payment_mode, is_cancelled.
+    """
+    from fastapi.responses import StreamingResponse
+    import io
+    import csv
+
+    # ---- date filters ----
+    date_q: dict = {}
+    if start_date:
+        try:
+            date_q["$gte"] = datetime.fromisoformat(start_date)
+        except Exception:
+            pass
+    if end_date:
+        try:
+            date_q["$lte"] = datetime.fromisoformat(end_date) + timedelta(days=1)
+        except Exception:
+            pass
+
+    rows = []
+
+    # ---- agent restriction ----
+    is_agent = current_user.get("role") == "agent"
+    forced_outlet = current_user.get("outlet_id") if is_agent else None
+    eff_outlet = forced_outlet or outlet_id
+
+    # ---- SALES ----
+    if type in (None, "all", "sale"):
+        sale_query: dict = {}
+        if not include_deleted:
+            sale_query["$or"] = [{"is_deleted": {"$exists": False}}, {"is_deleted": False}]
+        if date_q:
+            sale_query["created_at"] = date_q
+        if customer_id:
+            sale_query["customer_id"] = customer_id
+        if eff_outlet:
+            sale_query["outlet_id"] = eff_outlet
+
+        sales_docs = await db.sales.find(sale_query).sort("created_at", -1).to_list(2000)
+
+        outlet_ids = list({s.get("outlet_id") for s in sales_docs if s.get("outlet_id")})
+        outlets_list = await db.outlets.find({"id": {"$in": outlet_ids}}).to_list(500) if outlet_ids else []
+        outlets_map = {o["id"]: o.get("name", "") for o in outlets_list}
+
+        for s in sales_docs:
+            dt = s.get("created_at") or datetime.utcnow()
+            outlet_name = outlets_map.get(s.get("outlet_id"), "")
+            person = s.get("customer_name") or "-"
+            ref = s.get("bill_number", "")
+            payment = s.get("payment_mode", "")
+            is_cancelled = bool(s.get("is_deleted"))
+            for it in (s.get("items") or []):
+                rows.append({
+                    "date": dt.strftime("%Y-%m-%d") if isinstance(dt, datetime) else str(dt),
+                    "time": dt.strftime("%H:%M:%S") if isinstance(dt, datetime) else "",
+                    "type": "Sale",
+                    "reference": ref,
+                    "person_name": person,
+                    "outlet": outlet_name,
+                    "product": it.get("product_name", ""),
+                    "variety": it.get("variety_name", "") or "",
+                    "quantity": it.get("quantity", 0),
+                    "rate": it.get("rate", 0),
+                    "amount": it.get("amount", 0),
+                    "total": s.get("total_amount", 0),
+                    "payment_mode": payment,
+                    "is_cancelled": is_cancelled,
+                })
+
+    # ---- PURCHASES (vendor procurement) ----
+    if type in (None, "all", "purchase"):
+        proc_query: dict = {}
+        if not include_deleted:
+            proc_query["$or"] = [{"is_deleted": {"$exists": False}}, {"is_deleted": False}]
+        if date_q:
+            proc_query["created_at"] = date_q
+        if vendor_id:
+            proc_query["vendor_id"] = vendor_id
+        if eff_outlet:
+            proc_query["outlet_id"] = eff_outlet
+
+        proc_docs = await db.vendor_procurement.find(proc_query).sort("created_at", -1).to_list(2000)
+
+        outlet_ids = list({p.get("outlet_id") for p in proc_docs if p.get("outlet_id")})
+        outlets_list = await db.outlets.find({"id": {"$in": outlet_ids}}).to_list(500) if outlet_ids else []
+        outlets_map = {o["id"]: o.get("name", "") for o in outlets_list}
+
+        for p in proc_docs:
+            dt = p.get("created_at") or datetime.utcnow()
+            outlet_name = outlets_map.get(p.get("outlet_id"), "")
+            rows.append({
+                "date": dt.strftime("%Y-%m-%d") if isinstance(dt, datetime) else str(dt),
+                "time": dt.strftime("%H:%M:%S") if isinstance(dt, datetime) else "",
+                "type": "Purchase",
+                "reference": p.get("receipt_number", ""),
+                "person_name": p.get("vendor_name") or p.get("manual_vendor_name") or "-",
+                "outlet": outlet_name,
+                "product": p.get("product_name") or p.get("manual_product_name") or "",
+                "variety": p.get("variety_name") or "",
+                "quantity": p.get("quantity", 0),
+                "rate": p.get("rate", 0),
+                "amount": p.get("total_amount", 0),
+                "total": p.get("total_amount", 0),
+                "payment_mode": p.get("payment_mode", ""),
+                "is_cancelled": bool(p.get("is_deleted")),
+            })
+
+    # newest first
+    rows.sort(key=lambda r: (r.get("date", ""), r.get("time", "")), reverse=True)
+
+    if (format or "json").lower() == "csv":
+        buffer = io.StringIO()
+        fieldnames = [
+            "date", "time", "type", "reference", "person_name", "outlet",
+            "product", "variety", "quantity", "rate", "amount", "total",
+            "payment_mode", "is_cancelled",
+        ]
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames)
+        writer.writeheader()
+        for r in rows:
+            writer.writerow(r)
+        buffer.seek(0)
+        filename = f"transactions_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+
+    return {"count": len(rows), "rows": rows}
+
+
+@api_router.get("/reports/raw")
+async def report_raw(
+    type: str = "sale",  # sale | purchase
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    format: Optional[str] = "csv",
+    current_user: dict = Depends(require_admin),
+):
+    """
+    Raw transaction dump for admins (full payload). Includes deleted entries with the deletion fields.
+    """
+    from fastapi.responses import StreamingResponse
+    import io
+    import csv
+    import json
+
+    date_q: dict = {}
+    if start_date:
+        try:
+            date_q["$gte"] = datetime.fromisoformat(start_date)
+        except Exception:
+            pass
+    if end_date:
+        try:
+            date_q["$lte"] = datetime.fromisoformat(end_date) + timedelta(days=1)
+        except Exception:
+            pass
+
+    coll = db.sales if type == "sale" else db.vendor_procurement
+    query: dict = {}
+    if date_q:
+        query["created_at"] = date_q
+
+    docs = await coll.find(query).sort("created_at", -1).to_list(5000)
+    for d in docs:
+        d.pop("_id", None)
+
+    if (format or "csv").lower() == "csv":
+        buffer = io.StringIO()
+        # union of all keys for header
+        keys = set()
+        for d in docs:
+            keys.update(d.keys())
+        fieldnames = sorted(keys)
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        for d in docs:
+            row = {}
+            for k in fieldnames:
+                v = d.get(k)
+                if isinstance(v, (list, dict)):
+                    row[k] = json.dumps(v, default=str)
+                elif isinstance(v, datetime):
+                    row[k] = v.isoformat()
+                else:
+                    row[k] = v
+            writer.writerow(row)
+        buffer.seek(0)
+        filename = f"raw_{type}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+
+    return {"count": len(docs), "rows": docs}
+
+
 @api_router.get("/vendors/with-dues")
 async def get_vendors_with_dues(current_user: dict = Depends(get_current_user)):
     """Get all vendors with outstanding dues (for Khata overview)"""
@@ -3561,22 +3778,31 @@ async def get_vendor_procurement(
     vendor_id: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    include_deleted: bool = False,
     current_user: dict = Depends(get_current_user)
 ):
-    """Get vendor procurement records"""
+    """Get vendor procurement records (agent restricted to own outlet)"""
     query = {}
-    
+
+    # Hide cancelled by default
+    if not include_deleted:
+        query["$or"] = [{"is_deleted": {"$exists": False}}, {"is_deleted": False}]
+
+    # Agent-only outlet restriction
+    if current_user.get("role") == "agent" and current_user.get("outlet_id"):
+        query["outlet_id"] = current_user["outlet_id"]
+
     if vendor_id:
         query["vendor_id"] = vendor_id
-    
+
     if start_date:
         query["created_at"] = {"$gte": datetime.fromisoformat(start_date)}
     if end_date:
-        if "created_at" in query:
+        if "created_at" in query and isinstance(query["created_at"], dict):
             query["created_at"]["$lte"] = datetime.fromisoformat(end_date) + timedelta(days=1)
         else:
             query["created_at"] = {"$lte": datetime.fromisoformat(end_date) + timedelta(days=1)}
-    
+
     procurements = await db.vendor_procurement.find(query).sort("created_at", -1).to_list(500)
     result = []
     for p in procurements:

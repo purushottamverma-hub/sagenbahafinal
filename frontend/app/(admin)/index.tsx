@@ -15,6 +15,7 @@ import { Card } from '../../src/components/Card';
 import { useTranslation } from '../../src/utils/useTranslation';
 import { useAuthStore } from '../../src/store/authStore';
 import api from '../../src/utils/api';
+import GlobalSearchModal from '../../src/components/GlobalSearchModal';
 
 interface DashboardData {
   today: {
@@ -51,6 +52,7 @@ export default function AdminDashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
 
   const fetchDashboard = async () => {
     try {
@@ -105,10 +107,17 @@ export default function AdminDashboard() {
           </Text>
           <Text style={styles.userName}>{user?.full_name || 'Admin'}</Text>
         </View>
-        <TouchableOpacity onPress={handleLogout} style={styles.logoutBtn}>
-          <Ionicons name="log-out-outline" size={24} color="#D32F2F" />
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <TouchableOpacity onPress={() => setShowSearch(true)} style={styles.logoutBtn} accessibilityLabel="Global search">
+            <Ionicons name="search" size={24} color="#2E7D32" />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handleLogout} style={styles.logoutBtn}>
+            <Ionicons name="log-out-outline" size={24} color="#D32F2F" />
+          </TouchableOpacity>
+        </View>
       </View>
+
+      <GlobalSearchModal visible={showSearch} onClose={() => setShowSearch(false)} />
 
       <ScrollView
         style={styles.content}
