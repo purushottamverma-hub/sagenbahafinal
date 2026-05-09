@@ -2802,7 +2802,9 @@ async def report_transactions(
                 })
 
     # ---- PURCHASES (vendor procurement) ----
-    if type in (None, "all", "purchase"):
+    # Skip purchases entirely when filtering by customer (purchases are vendor-scoped)
+    skip_purchases = bool(customer_id)
+    if (type in (None, "all", "purchase")) and not skip_purchases:
         proc_query: dict = {}
         if not include_deleted:
             proc_query["$or"] = [{"is_deleted": {"$exists": False}}, {"is_deleted": False}]

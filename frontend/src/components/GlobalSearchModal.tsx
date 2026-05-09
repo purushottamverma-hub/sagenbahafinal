@@ -13,7 +13,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { api } from '../services/api';
+import api from '../utils/api';
 import { useSettingsStore } from '../store/settingsStore';
 
 interface Props {
