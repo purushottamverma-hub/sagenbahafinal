@@ -38,11 +38,18 @@ interface Vendor {
   outstanding_dues?: number;
 }
 
+interface ProductVariety {
+  id?: string;
+  name: string;
+  name_hi?: string;
+}
+
 interface Product {
   id: string;
   name: string;
   name_hi?: string;
   unit: string;
+  varieties?: ProductVariety[];
 }
 
 interface Outlet {
@@ -84,6 +91,7 @@ export default function PurchaseScreen() {
   const [sourceType, setSourceType] = useState<'farmer' | 'vendor'>('farmer');
   const [selectedSource, setSelectedSource] = useState('');
   const [selectedProduct, setSelectedProduct] = useState('');
+  const [selectedVariety, setSelectedVariety] = useState<ProductVariety | null>(null);
   const [selectedOutlet, setSelectedOutlet] = useState('');
   const [quantity, setQuantity] = useState('');
   const [rate, setRate] = useState('');
@@ -352,6 +360,18 @@ export default function PurchaseScreen() {
       return;
     }
 
+    // If chosen product has varieties, require one to be selected
+    if (!useManualProduct && selectedProduct) {
+      const prod = products.find((p) => p.id === selectedProduct);
+      if (prod?.varieties && prod.varieties.length > 0 && !selectedVariety) {
+        Alert.alert(
+          language === 'hi' ? 'त्रुटि' : 'Error',
+          language === 'hi' ? 'कृपया उत्पाद की किस्म चुनें' : 'Please select a product variety'
+        );
+        return;
+      }
+    }
+
     const amounts = calculateAmounts();
     setLoading(true);
 
@@ -380,6 +400,8 @@ export default function PurchaseScreen() {
           product_id: useManualProduct ? 'manual' : selectedProduct,
           manual_product_name: useManualProduct ? manualProductName : null,
           manual_product_unit: useManualProduct ? manualProductUnit : null,
+          variety_id: selectedVariety?.id || null,
+          variety_name: selectedVariety ? (selectedVariety.name_hi || selectedVariety.name) : null,
           outlet_id: selectedOutlet,
           quantity: parseFloat(quantity),
           rate: parseFloat(rate),
@@ -411,6 +433,7 @@ export default function PurchaseScreen() {
   const resetForm = () => {
     setSelectedSource('');
     setSelectedProduct('');
+    setSelectedVariety(null);
     setQuantity('');
     setRate('');
     setPaymentMode('cash');
@@ -936,10 +959,11 @@ export default function PurchaseScreen() {
                       <TouchableOpacity
                         key={p.id}
                         style={[styles.selectChip, selectedProduct === p.id && styles.productChipActive]}
-                        onPress={() => setSelectedProduct(p.id)}
+                        onPress={() => { setSelectedProduct(p.id); setSelectedVariety(null); }}
                       >
                         <Text style={[styles.selectText, selectedProduct === p.id && styles.selectTextActive]}>
                           {language === 'hi' && p.name_hi ? p.name_hi : p.name}
+                          {p.varieties && p.varieties.length > 0 ? `  · ${p.varieties.length}` : ''}
                         </Text>
                         <Text style={[styles.selectSubtext, selectedProduct === p.id && styles.selectTextActive]}>
                           {p.unit}
@@ -947,6 +971,36 @@ export default function PurchaseScreen() {
                       </TouchableOpacity>
                     ))}
                   </ScrollView>
+
+                  {/* Variety picker — only shown when chosen product has varieties */}
+                  {(() => {
+                    const p = products.find((x) => x.id === selectedProduct);
+                    if (!p || !p.varieties || p.varieties.length === 0) return null;
+                    return (
+                      <View style={{ marginTop: 8 }}>
+                        <Text style={[styles.label, { marginBottom: 6 }]}>
+                          {language === 'hi' ? 'किस्म चुनें *' : 'Select Variety *'}
+                        </Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                          {p.varieties.map((v, idx) => {
+                            const active = selectedVariety?.id === v.id || selectedVariety?.name === v.name;
+                            return (
+                              <TouchableOpacity
+                                key={v.id || idx}
+                                style={[styles.selectChip, active && styles.productChipActive]}
+                                onPress={() => setSelectedVariety(v)}
+                              >
+                                <Ionicons name="leaf-outline" size={14} color={active ? '#FFF' : '#2E7D32'} />
+                                <Text style={[styles.selectText, active && styles.selectTextActive, { marginLeft: 4 }]}>
+                                  {language === 'hi' && v.name_hi ? v.name_hi : v.name}
+                                </Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </ScrollView>
+                      </View>
+                    );
+                  })()}
                 </>
               )}
 

@@ -2,34 +2,47 @@ import React, { useEffect, useState } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { useFonts } from 'expo-font';
+import * as SplashScreen from 'expo-splash-screen';
+import { Ionicons, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useAuthStore } from '../src/store/authStore';
 import { useSettingsStore } from '../src/store/settingsStore';
+
+// Prevent splash screen from auto-hiding until fonts are loaded
+SplashScreen.preventAutoHideAsync().catch(() => {
+  /* ignore — already hidden */
+});
 
 export default function RootLayout() {
   const [isReady, setIsReady] = useState(false);
   const hydrateAuth = useAuthStore((state) => state.hydrate);
   const hydrateSettings = useSettingsStore((state) => state.hydrate);
 
+  // Preload icon fonts ONCE at root to avoid the SDK 54 race condition
+  // where many <Ionicons> mounting in parallel cause "Font file is empty" errors.
+  const [fontsLoaded, fontError] = useFonts({
+    ...Ionicons.font,
+    ...MaterialIcons.font,
+    ...MaterialCommunityIcons.font,
+  });
+
   useEffect(() => {
+    if (!fontsLoaded && !fontError) return;
     const initializeApp = async () => {
       try {
-        // Hydrate stores in parallel
-        await Promise.all([
-          hydrateAuth(),
-          hydrateSettings()
-        ]);
+        await Promise.all([hydrateAuth(), hydrateSettings()]);
       } catch (error) {
         console.error('Failed to initialize app:', error);
       } finally {
         setIsReady(true);
+        SplashScreen.hideAsync().catch(() => {});
       }
     };
-
     initializeApp();
-  }, []);
+  }, [fontsLoaded, fontError]);
 
-  // Show loading screen while hydrating
-  if (!isReady) {
+  // Wait for both font load and store hydration before rendering routes
+  if ((!fontsLoaded && !fontError) || !isReady) {
     return (
       <View style={styles.loadingContainer}>
         <StatusBar style="dark" />
