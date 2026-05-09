@@ -20,7 +20,7 @@ import { useSettingsStore } from '../../src/store/settingsStore';
 import api from '../../src/utils/api';
 import * as XLSX from 'xlsx';
 
-type ReportType = 'sales' | 'stock' | 'customers' | 'farmers' | 'purchases';
+type ReportType = 'sales' | 'stock' | 'customers' | 'farmers' | 'purchases' | 'transactions' | 'raw_sales' | 'raw_purchases';
 
 interface ReportOption {
   id: ReportType;
@@ -70,6 +70,30 @@ const reportOptions: ReportOption[] = [
     description: { en: 'Farmer produce purchases', hi: 'किसानों से खरीद' },
     icon: 'basket',
     color: '#F57C00',
+    hasDateFilter: true,
+  },
+  {
+    id: 'transactions',
+    title: { en: 'Unified Transactions (CSV)', hi: 'एकीकृत लेन-देन (CSV)' },
+    description: { en: 'Sales + Purchases combined, with variety, qty, rate, total', hi: 'बिक्री + खरीद एक साथ' },
+    icon: 'documents',
+    color: '#00838F',
+    hasDateFilter: true,
+  },
+  {
+    id: 'raw_sales',
+    title: { en: 'Raw Sales Data (CSV)', hi: 'कच्चा बिक्री डेटा (CSV)' },
+    description: { en: 'Full-payload sales dump for audit', hi: 'पूरा बिक्री डंप' },
+    icon: 'analytics',
+    color: '#5E35B1',
+    hasDateFilter: true,
+  },
+  {
+    id: 'raw_purchases',
+    title: { en: 'Raw Purchase Data (CSV)', hi: 'कच्चा खरीद डेटा (CSV)' },
+    description: { en: 'Full-payload procurement dump for audit', hi: 'पूरा खरीद डंप' },
+    icon: 'archive',
+    color: '#6D4C41',
     hasDateFilter: true,
   },
 ];
