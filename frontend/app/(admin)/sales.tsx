@@ -105,6 +105,9 @@ export default function SalesScreen() {
   const [onlineAmount, setOnlineAmount] = useState('');
   const [discount, setDiscount] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  // Edit mode (sales)
+  const [editingSaleId, setEditingSaleId] = useState<string | null>(null);
+  const [editingSaleBill, setEditingSaleBill] = useState<string | null>(null);
 
   // Customer Selection Flow State
   const [customerSelectionMode, setCustomerSelectionMode] = useState<'select' | 'new' | 'existing' | 'confirmed'>('select');
@@ -372,6 +375,54 @@ export default function SalesScreen() {
     setCustomerSearch('');
     setSearchResults([]);
     setNewCustomerData({ name: '', mobile: '', address: '', is_shareholder: false, folio_number: '' });
+    // Reset edit mode
+    setEditingSaleId(null);
+    setEditingSaleBill(null);
+  };
+
+  // ===== Edit Sale =====
+  const handleEditSale = (sale: Sale) => {
+    if ((sale as any).is_deleted) {
+      Alert.alert(t('error'), language === 'hi' ? 'रद्द किए गए लेनदेन को संपादित नहीं किया जा सकता' : 'Cannot edit a cancelled transaction');
+      return;
+    }
+    try {
+      const days = (Date.now() - new Date(sale.created_at).getTime()) / (1000 * 60 * 60 * 24);
+      if (days > 30) {
+        Alert.alert(t('error'), language === 'hi' ? '30 दिन से पुराने लेनदेन संपादित नहीं किए जा सकते' : 'Cannot edit transactions older than 30 days');
+        return;
+      }
+    } catch {}
+
+    resetSaleForm();
+    setEditingSaleId(sale.id);
+    setEditingSaleBill(sale.bill_number);
+
+    // Outlet
+    setSelectedOutlet(sale.outlet_id || '');
+
+    // Customer (find in customers list)
+    const cust = customers.find((c) => c.id === (sale as any).customer_id);
+    if (cust) {
+      setConfirmedCustomer(cust as any);
+      setCustomerSelectionMode('confirmed');
+    } else if ((sale as any).customer_id && sale.customer_name) {
+      setConfirmedCustomer({ id: (sale as any).customer_id, name: sale.customer_name } as any);
+      setCustomerSelectionMode('confirmed');
+    }
+
+    // Items
+    setSaleItems((sale.items || []).map((it: any) => ({ ...it })));
+
+    // Discount + payments
+    setDiscount(String((sale as any).discount || 0));
+    setPaymentMode(sale.payment_mode || 'cash');
+    setCashAmount(String((sale as any).cash_amount || 0));
+    setOnlineAmount(String((sale as any).online_amount || 0));
+
+    // Close bill modal, open new sale modal in edit mode
+    setShowBillDetails(false);
+    setShowNewSale(true);
   };
 
   const handleCreateSale = async () => {
@@ -428,10 +479,15 @@ export default function SalesScreen() {
         credit_amount: credit,
       };
 
-      const response = await api.post('/sales', saleData);
+      const response = editingSaleId
+        ? await api.put(`/sales/${editingSaleId}?reason=${encodeURIComponent('admin-edit')}`, saleData)
+        : await api.post('/sales', saleData);
+      const billNo = (response.data?.sale?.bill_number) || response.data.bill_number || editingSaleBill;
       Alert.alert(
         t('success'),
-        `${t('billNumber')}: ${response.data.bill_number}`,
+        editingSaleId
+          ? (language === 'hi' ? `बिल अपडेट हुआ: ${billNo}` : `Bill updated: ${billNo}`)
+          : `${t('billNumber')}: ${billNo}`,
         [{ text: t('ok'), onPress: () => {
           setShowNewSale(false);
           resetSaleForm();
@@ -682,7 +738,11 @@ export default function SalesScreen() {
             <TouchableOpacity onPress={() => { setShowNewSale(false); resetSaleForm(); }}>
               <Ionicons name="close" size={28} color="#333" />
             </TouchableOpacity>
-            <Text style={styles.modalTitle}>{t('newSale')}</Text>
+            <Text style={styles.modalTitle}>
+              {editingSaleId
+                ? (language === 'hi' ? `बिल संपादित — ${editingSaleBill || ''}` : `Edit Bill — ${editingSaleBill || ''}`)
+                : t('newSale')}
+            </Text>
             <View style={{ width: 28 }} />
           </View>
 
@@ -1294,6 +1354,15 @@ export default function SalesScreen() {
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
+                  style={[styles.billActionBtn, styles.editBtn]}
+                  onPress={() => selectedSale && handleEditSale(selectedSale)}
+                >
+                  <Ionicons name="create-outline" size={22} color="#FFF" />
+                  <Text style={styles.billActionText}>
+                    {language === 'hi' ? 'संपादित' : 'Edit'}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
                   style={[styles.billActionBtn, styles.deleteBtn]}
                   onPress={initiateDelete}
                 >
@@ -1781,6 +1850,9 @@ const styles = StyleSheet.create({
   },
   shareBtn: {
     backgroundColor: '#1976D2',
+  },
+  editBtn: {
+    backgroundColor: '#F57C00',
   },
   deleteBtn: {
     backgroundColor: '#D32F2F',

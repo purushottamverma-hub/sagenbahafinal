@@ -361,13 +361,37 @@ export default function ManageScreen() {
           <Ionicons name="business" size={24} color={item.is_central ? '#1976D2' : '#2E7D32'} />
         </View>
         <View style={styles.itemInfo}>
-          <Text style={styles.itemName}>{item.name}</Text>
-          {item.address && <Text style={styles.itemMeta}>{item.address}</Text>}
-          {item.is_central && (
-            <View style={styles.centralBadge}>
-              <Text style={styles.centralText}>{language === 'hi' ? 'केंद्रीय' : 'Central'}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+            <Text style={styles.itemName}>{item.name}</Text>
+            {item.is_central && (
+              <View style={styles.centralBadge}>
+                <Text style={styles.centralText}>{language === 'hi' ? 'केंद्रीय' : 'Central'}</Text>
+              </View>
+            )}
+            {!item.is_active && (
+              <View style={[styles.centralBadge, { backgroundColor: '#FFEBEE' }]}>
+                <Text style={[styles.centralText, { color: '#C62828' }]}>{language === 'hi' ? 'निष्क्रिय' : 'Inactive'}</Text>
+              </View>
+            )}
+          </View>
+          {item.address ? (
+            <View style={styles.outletMetaRow}>
+              <Ionicons name="location-outline" size={13} color="#666" />
+              <Text style={styles.itemMeta} numberOfLines={2}>{item.address}</Text>
             </View>
-          )}
+          ) : null}
+          {item.contact_person ? (
+            <View style={styles.outletMetaRow}>
+              <Ionicons name="person-outline" size={13} color="#666" />
+              <Text style={styles.itemMeta}>{item.contact_person}</Text>
+            </View>
+          ) : null}
+          {item.mobile ? (
+            <View style={styles.outletMetaRow}>
+              <Ionicons name="call-outline" size={13} color="#666" />
+              <Text style={styles.itemMeta}>{item.mobile}</Text>
+            </View>
+          ) : null}
         </View>
         <View style={styles.itemActions}>
           <TouchableOpacity onPress={() => handleEdit(item)} style={styles.actionBtn}>
@@ -768,6 +792,7 @@ const styles = StyleSheet.create({
   itemInfo: { flex: 1 },
   itemName: { fontSize: 15, fontWeight: '600', color: '#333' },
   itemMeta: { fontSize: 13, color: '#666', marginTop: 2 },
+  outletMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
   itemActions: { flexDirection: 'row', gap: 8 },
   actionBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#F5F5F5', justifyContent: 'center', alignItems: 'center' },
   centralBadge: { alignSelf: 'flex-start', backgroundColor: '#E3F2FD', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, marginTop: 4 },

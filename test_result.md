@@ -921,3 +921,14 @@ test_plan:
 
           Test plan: see backend_test.py creation. Use admin/admin123. Use TEST_<uuid> entities only. Do not mutate live data.
           Required cases: 1) Edit sale qty (verify ledger & stock deltas), 2) Edit sale payment mode credit→cash, 3) Insufficient stock rollback, 4) Edit procurement to swap items+payment to cash, 5) Edit edge cases (items=[] → 400, non-existent id → 404, deleted doc → 400).
+
+  - agent: "main"
+    message: |
+      Frontend Edit UI + Outlet view enhancement (Feb 2026 continuation):
+      Files changed:
+       - /app/frontend/app/(admin)/sales.tsx — Added editingSaleId/editingSaleBill state, handleEditSale(sale) pre-fills modal (outlet, customer, items, discount, payment), handleCreateSale now branches PUT vs POST, modal title flips to "Edit Bill — <bill>", new orange Edit button added to bill view modal next to Print/Share/Delete.
+       - /app/frontend/app/(admin)/purchase.tsx — Added editingProcurementId/editingProcurementBill state, handleEditProcurement(item) pre-fills modal (vendor, outlet, cart from items, payment), bulk submit branches PUT /vendor-procurement/{id} vs POST /vendor-procurement/bulk, modal title flips to "Edit Procurement — <receipt>", blue Edit pencil button added to procurement card footer (vendor source, non-deleted only).
+       - /app/frontend/app/(admin)/manage.tsx — Outlet card now shows contact_person, mobile, address each with icon row; Active/Inactive badge added; central badge moved next to name. Better visual density.
+      Backend: 62/62 backend tests already passed for PUT /api/sales/{id} and PUT /api/vendor-procurement/{id} including reverse+reapply, rollback on insufficient stock, 400 for items=[], 404 for unknown id, 400 for deleted/cancelled, 30-day limit.
+      Pending user verification: visual frontend test of (a) Edit Sale flow (open bill → Edit → modify qty → Save → verify ledger), (b) Edit Procurement flow (tap pencil on vendor card → modify items → Save), (c) Outlet card display improvements. Default is to NOT trigger the Expo testing agent automatically; ask user first.
+

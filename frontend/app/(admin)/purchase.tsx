@@ -167,6 +167,10 @@ export default function PurchaseScreen() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const cartTotal = useMemo(() => cart.reduce((s, it) => s + (it.amount || 0), 0), [cart]);
 
+  // Edit mode (procurement)
+  const [editingProcurementId, setEditingProcurementId] = useState<string | null>(null);
+  const [editingProcurementBill, setEditingProcurementBill] = useState<string | null>(null);
+
   const fetchData = async () => {
     try {
       const [farmerPurchaseRes, vendorPurchaseRes, farmerRes, vendorRes, productRes, outletRes] = await Promise.all([
@@ -474,7 +478,7 @@ export default function PurchaseScreen() {
 
       setLoading(true);
       try {
-        await api.post('/vendor-procurement/bulk', {
+        const payload = {
           vendor_id: confirmedVendor.id,
           outlet_id: selectedOutlet,
           items: cart.map((it) => ({
@@ -490,14 +494,28 @@ export default function PurchaseScreen() {
           cash_amount: cashAmt,
           online_amount: onlineAmt,
           notes: notes || null,
-        });
+        };
 
-        Alert.alert(
-          language === 'hi' ? 'सफल' : 'Success',
-          language === 'hi'
-            ? `खरीद दर्ज हुई — ${cart.length} उत्पाद, कुल ₹${total.toFixed(2)}`
-            : `Procurement recorded — ${cart.length} item(s), total ₹${total.toFixed(2)}`
-        );
+        if (editingProcurementId) {
+          await api.put(
+            `/vendor-procurement/${editingProcurementId}?reason=${encodeURIComponent('admin-edit')}`,
+            payload
+          );
+          Alert.alert(
+            language === 'hi' ? 'सफल' : 'Success',
+            language === 'hi'
+              ? `खरीद अपडेट हुई — ${cart.length} उत्पाद, कुल ₹${total.toFixed(2)}`
+              : `Procurement updated — ${cart.length} item(s), total ₹${total.toFixed(2)}`
+          );
+        } else {
+          await api.post('/vendor-procurement/bulk', payload);
+          Alert.alert(
+            language === 'hi' ? 'सफल' : 'Success',
+            language === 'hi'
+              ? `खरीद दर्ज हुई — ${cart.length} उत्पाद, कुल ₹${total.toFixed(2)}`
+              : `Procurement recorded — ${cart.length} item(s), total ₹${total.toFixed(2)}`
+          );
+        }
         setShowModal(false);
         resetForm();
         fetchData();
@@ -636,6 +654,9 @@ export default function PurchaseScreen() {
     setNewVendorData({ name: '', mobile: '', address: '', village: '' });
     // Reset cart
     setCart([]);
+    // Reset edit mode
+    setEditingProcurementId(null);
+    setEditingProcurementBill(null);
   };
 
   // ===== Print/Share Vendor Procurement Bill =====
@@ -702,6 +723,87 @@ export default function PurchaseScreen() {
     }
   };
 
+  // ===== Edit Procurement =====
+  const handleEditProcurement = (item: Purchase) => {
+    if (item.is_deleted) {
+      Alert.alert(language === 'hi' ? 'त्रुटि' : 'Error', language === 'hi' ? 'रद्द किए गए लेनदेन को संपादित नहीं किया जा सकता' : 'Cannot edit a cancelled transaction');
+      return;
+    }
+    if (item.source_type !== 'vendor') {
+      Alert.alert(language === 'hi' ? 'सूचना' : 'Info', language === 'hi' ? 'अभी केवल विक्रेता खरीद को संपादित किया जा सकता है' : 'Only vendor procurement editing is supported currently');
+      return;
+    }
+
+    // 30-day check (client-side hint; server enforces strictly)
+    try {
+      const days = (Date.now() - new Date(item.created_at).getTime()) / (1000 * 60 * 60 * 24);
+      if (days > 30) {
+        Alert.alert(
+          language === 'hi' ? 'त्रुटि' : 'Error',
+          language === 'hi' ? '30 दिन से पुराने लेनदेन संपादित नहीं किए जा सकते' : 'Cannot edit transactions older than 30 days'
+        );
+        return;
+      }
+    } catch {}
+
+    // Pre-fill modal state
+    resetForm();
+    setEditingProcurementId(item.id);
+    setEditingProcurementBill(item.receipt_number);
+
+    // Source type & vendor
+    setSourceType('vendor');
+    setUseManualSource(false);
+
+    // Find vendor in list
+    const v = vendors.find((vv) => vv.id === item.vendor_id);
+    if (v) {
+      setConfirmedVendor(v as any);
+      setVendorSelectionMode('confirmed');
+    } else if (item.vendor_id && item.vendor_name) {
+      setConfirmedVendor({ id: item.vendor_id, name: item.vendor_name } as any);
+      setVendorSelectionMode('confirmed');
+    }
+
+    // Outlet
+    setSelectedOutlet(item.outlet_id || '');
+
+    // Cart from existing items
+    const itemsArr = (item.items && item.items.length > 0)
+      ? item.items
+      : [{
+          product_id: (item as any).product_id || 'manual',
+          product_name: item.product_name,
+          product_unit: 'kg',
+          variety_id: null,
+          variety_name: item.variety_name || null,
+          quantity: item.quantity,
+          rate: item.rate,
+          amount: item.total_amount,
+        }];
+
+    const newCart: CartItem[] = itemsArr.map((it: any) => ({
+      product_id: it.product_id || 'manual',
+      product_name: it.product_name || '',
+      product_unit: it.product_unit || 'kg',
+      variety_id: it.variety_id || null,
+      variety_name: it.variety_name || null,
+      quantity: it.quantity || 0,
+      rate: it.rate || 0,
+      amount: it.amount || (it.quantity || 0) * (it.rate || 0),
+      manual_product_name: it.product_id === 'manual' ? (it.manual_product_name || it.product_name || '') : null,
+      manual_product_unit: it.product_id === 'manual' ? (it.manual_product_unit || it.product_unit || 'kg') : null,
+    }));
+    setCart(newCart);
+
+    // Payment fields
+    setPaymentMode((item.payment_mode as any) || 'cash');
+    setCashAmount(String(item.cash_amount || 0));
+    setOnlineAmount(String(item.online_amount || 0));
+
+    setShowModal(true);
+  };
+
   const renderPurchase = ({ item }: { item: Purchase }) => (
     <Card style={styles.purchaseCard}>
       <View style={styles.purchaseHeader}>
@@ -766,8 +868,15 @@ export default function PurchaseScreen() {
       <View style={styles.purchaseFooter}>
         <Text style={styles.receiptNum}>{item.receipt_number}</Text>
         <View style={styles.actionsRow}>
-          {item.source_type === 'vendor' && (
+          {item.source_type === 'vendor' && !item.is_deleted && (
             <>
+              <TouchableOpacity
+                style={[styles.actionIconBtn, { backgroundColor: '#E3F2FD' }]}
+                onPress={() => handleEditProcurement(item)}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <Ionicons name="pencil-outline" size={18} color="#1976D2" />
+              </TouchableOpacity>
               <TouchableOpacity
                 style={styles.actionIconBtn}
                 onPress={() => handlePrintProcurement(item)}
@@ -842,7 +951,9 @@ export default function PurchaseScreen() {
               <View style={styles.modalContent}>
                 <View style={styles.modalHeader}>
                   <Text style={styles.modalTitle}>
-                    {language === 'hi' ? 'नई खरीद' : 'New Purchase'}
+                    {editingProcurementId
+                      ? (language === 'hi' ? `खरीद संपादित करें — ${editingProcurementBill || ''}` : `Edit Procurement — ${editingProcurementBill || ''}`)
+                      : (language === 'hi' ? 'नई खरीद' : 'New Purchase')}
                   </Text>
                   <TouchableOpacity
                     onPress={() => { setShowModal(false); resetForm(); }}
