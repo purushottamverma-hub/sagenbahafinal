@@ -2824,22 +2824,39 @@ async def report_transactions(
         for p in proc_docs:
             dt = p.get("created_at") or datetime.utcnow()
             outlet_name = outlets_map.get(p.get("outlet_id"), "")
-            rows.append({
+            base = {
                 "date": dt.strftime("%Y-%m-%d") if isinstance(dt, datetime) else str(dt),
                 "time": dt.strftime("%H:%M:%S") if isinstance(dt, datetime) else "",
                 "type": "Purchase",
                 "reference": p.get("receipt_number", ""),
                 "person_name": p.get("vendor_name") or p.get("manual_vendor_name") or "-",
                 "outlet": outlet_name,
-                "product": p.get("product_name") or p.get("manual_product_name") or "",
-                "variety": p.get("variety_name") or "",
-                "quantity": p.get("quantity", 0),
-                "rate": p.get("rate", 0),
-                "amount": p.get("total_amount", 0),
-                "total": p.get("total_amount", 0),
                 "payment_mode": p.get("payment_mode", ""),
                 "is_cancelled": bool(p.get("is_deleted")),
-            })
+                "total": p.get("total_amount", 0),
+            }
+            items = p.get("items") or []
+            if items:
+                # Multi-item procurement: emit one row per item
+                for it in items:
+                    rows.append({
+                        **base,
+                        "product": it.get("product_name", ""),
+                        "variety": it.get("variety_name", "") or "",
+                        "quantity": it.get("quantity", 0),
+                        "rate": it.get("rate", 0),
+                        "amount": it.get("amount", 0),
+                    })
+            else:
+                # Legacy single-item procurement
+                rows.append({
+                    **base,
+                    "product": p.get("product_name") or p.get("manual_product_name") or "",
+                    "variety": p.get("variety_name") or "",
+                    "quantity": p.get("quantity", 0),
+                    "rate": p.get("rate", 0),
+                    "amount": p.get("total_amount", 0),
+                })
 
     # newest first
     rows.sort(key=lambda r: (r.get("date", ""), r.get("time", "")), reverse=True)
@@ -3031,12 +3048,25 @@ async def get_vendor_ledger(
     transactions = []
     for p in purchases:
         is_cancelled = p.get("is_deleted", False)
+        items = p.get("items") or []
+        if items:
+            # Multi-item: show product names joined
+            names = [it.get("product_name", "") for it in items if it.get("product_name")]
+            short = ", ".join(names[:3])
+            if len(names) > 3:
+                short += f" +{len(names) - 3} more"
+            description_text = f"Purchase ({len(items)} items) - {short}" if short else f"Purchase ({len(items)} items)"
+        else:
+            description_text = f"Purchase - {p.get('product_name', 'N/A')}"
+        if is_cancelled:
+            description_text += " (CANCELLED)"
+
         transactions.append({
             "id": p["id"],
             "type": "purchase",
             "date": p["created_at"],
             "reference": p.get("receipt_number", ""),
-            "description": f"Purchase - {p.get('product_name', 'N/A')}" + (" (CANCELLED)" if is_cancelled else ""),
+            "description": description_text,
             "debit": 0 if is_cancelled else p.get("credit_amount", 0),
             "credit": 0,
             "quantity": p.get("quantity", 0),
@@ -3046,6 +3076,8 @@ async def get_vendor_ledger(
             "is_cancelled": is_cancelled,
             "deleted_at": p.get("deleted_at"),
             "deletion_reason": p.get("deletion_reason", ""),
+            "items": items,
+            "items_count": len(items) if items else 1,
         })
     
     for p in payments:
@@ -3646,6 +3678,211 @@ async def reject_shareholder_upgrade(request_id: str, remark: str = "Request rej
 
 # ===================== VENDOR PROCUREMENT =====================
 
+class BulkProcurementItem(BaseModel):
+    product_id: str  # 'manual' allowed
+    quantity: float
+    rate: float
+    variety_id: Optional[str] = None
+    variety_name: Optional[str] = None
+    manual_product_name: Optional[str] = None
+    manual_product_unit: Optional[str] = None
+
+
+class BulkProcurementCreate(BaseModel):
+    vendor_id: str  # 'manual' allowed
+    outlet_id: str
+    items: List[BulkProcurementItem]
+    payment_mode: str = "cash"  # cash | online | credit | partial
+    cash_amount: float = 0
+    online_amount: float = 0
+    notes: Optional[str] = None
+    manual_vendor_name: Optional[str] = None
+    manual_vendor_mobile: Optional[str] = None
+
+
+@api_router.post("/vendor-procurement/bulk")
+async def create_bulk_vendor_procurement(
+    payload: BulkProcurementCreate,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Create a single vendor procurement that contains MULTIPLE product line items.
+    Stored as one document with `items: [...]` array, single receipt_number, single total,
+    single ledger update. Stock is incremented per item. Mirrors the multi-line sales pattern.
+    """
+    if current_user["role"] not in ["admin", "agent"]:
+        raise HTTPException(status_code=403, detail="Only admin or agent can record vendor procurement")
+
+    if not payload.items or len(payload.items) == 0:
+        raise HTTPException(status_code=400, detail="At least one item is required")
+
+    # ---- Vendor resolution ----
+    vendor_doc = None
+    vendor_name = payload.manual_vendor_name
+    if payload.vendor_id != "manual":
+        vendor_doc = await db.vendors.find_one({"id": payload.vendor_id, "is_active": True})
+        if not vendor_doc:
+            raise HTTPException(status_code=404, detail="Vendor not found")
+        vendor_name = vendor_doc["name"]
+    elif not payload.manual_vendor_name:
+        raise HTTPException(status_code=400, detail="Manual vendor name required")
+
+    # ---- Outlet ----
+    outlet = await db.outlets.find_one({"id": payload.outlet_id, "is_active": True})
+    if not outlet:
+        raise HTTPException(status_code=404, detail="Outlet not found")
+
+    # ---- Validate & resolve each item ----
+    resolved_items: List[dict] = []
+    grand_total = 0.0
+
+    for raw in payload.items:
+        if raw.quantity is None or raw.quantity <= 0:
+            raise HTTPException(status_code=400, detail="Item quantity must be positive")
+        if raw.rate is None or raw.rate < 0:
+            raise HTTPException(status_code=400, detail="Item rate must be non-negative")
+
+        product_name = raw.manual_product_name
+        product_unit = raw.manual_product_unit or "kg"
+        if raw.product_id != "manual":
+            product = await db.products.find_one({"id": raw.product_id, "is_active": True})
+            if not product:
+                raise HTTPException(status_code=404, detail=f"Product {raw.product_id} not found")
+            product_name = product["name"]
+            product_unit = product.get("unit", "kg")
+        elif not raw.manual_product_name:
+            raise HTTPException(status_code=400, detail="Manual product name required for manual items")
+
+        amount = float(raw.quantity) * float(raw.rate)
+        grand_total += amount
+
+        resolved_items.append({
+            "product_id": raw.product_id,
+            "product_name": product_name,
+            "product_unit": product_unit,
+            "variety_id": raw.variety_id,
+            "variety_name": raw.variety_name,
+            "quantity": float(raw.quantity),
+            "rate": float(raw.rate),
+            "amount": amount,
+            "manual_product_name": raw.manual_product_name,
+            "manual_product_unit": raw.manual_product_unit,
+        })
+
+    # ---- Payment math ----
+    paid_amount = float(payload.cash_amount or 0) + float(payload.online_amount or 0)
+    credit_amount = max(0.0, grand_total - paid_amount)
+    payment_status = "paid" if credit_amount <= 0 else "credit"
+
+    # ---- Receipt number ----
+    count = await db.vendor_procurement.count_documents({})
+    receipt_number = f"VP{datetime.now().strftime('%Y%m%d')}{str(count + 1).zfill(4)}"
+
+    # ---- Document ----
+    proc_id = str(uuid.uuid4())
+    proc_doc = {
+        "id": proc_id,
+        "receipt_number": receipt_number,
+        "vendor_id": payload.vendor_id,
+        "vendor_name": vendor_name,
+        "manual_vendor_name": payload.manual_vendor_name,
+        "manual_vendor_mobile": payload.manual_vendor_mobile,
+        "outlet_id": payload.outlet_id,
+        "outlet_name": outlet["name"],
+        "items": resolved_items,
+        # Backward-compat top-level convenience fields (use FIRST item summary)
+        "product_id": resolved_items[0]["product_id"],
+        "product_name": (
+            f"{resolved_items[0]['product_name']}"
+            + (f" + {len(resolved_items) - 1} more" if len(resolved_items) > 1 else "")
+        ),
+        "variety_id": resolved_items[0].get("variety_id"),
+        "variety_name": resolved_items[0].get("variety_name"),
+        "quantity": sum(it["quantity"] for it in resolved_items),
+        "rate": resolved_items[0]["rate"],
+        "total_amount": grand_total,
+        "payment_mode": payload.payment_mode,
+        "cash_amount": float(payload.cash_amount or 0),
+        "online_amount": float(payload.online_amount or 0),
+        "credit_amount": credit_amount,
+        "payment_status": payment_status,
+        "notes": payload.notes,
+        "is_multi_item": True,
+        "items_count": len(resolved_items),
+        "created_by": current_user["id"],
+        "created_at": datetime.utcnow(),
+    }
+
+    await db.vendor_procurement.insert_one(proc_doc)
+
+    # ---- Stock updates per item ----
+    for it in resolved_items:
+        if it["product_id"] == "manual":
+            continue
+        existing = await db.stock.find_one({
+            "product_id": it["product_id"],
+            "outlet_id": payload.outlet_id,
+        })
+        if existing:
+            await db.stock.update_one(
+                {"id": existing["id"]},
+                {
+                    "$inc": {
+                        "quantity": it["quantity"],
+                        "stock_received": it["quantity"],
+                    },
+                    "$set": {"updated_at": datetime.utcnow()},
+                },
+            )
+        else:
+            new_stock = Stock(
+                product_id=it["product_id"],
+                outlet_id=payload.outlet_id,
+                quantity=it["quantity"],
+                stock_received=it["quantity"],
+            )
+            await db.stock.insert_one(new_stock.dict())
+
+        # Stock movement audit
+        movement = StockMovement(
+            product_id=it["product_id"],
+            to_outlet_id=payload.outlet_id,
+            quantity=it["quantity"],
+            movement_type="vendor_procurement",
+            reason=f"Vendor procurement from {vendor_name}. Receipt: {receipt_number}",
+            created_by=current_user["id"],
+        )
+        await db.stock_movements.insert_one(movement.dict())
+
+    # ---- Vendor ledger (only for non-manual vendor) ----
+    if payload.vendor_id != "manual":
+        await db.vendors.update_one(
+            {"id": payload.vendor_id},
+            {
+                "$inc": {
+                    "total_purchases": grand_total,
+                    "total_paid": paid_amount,
+                    "outstanding_dues": credit_amount,
+                    "transaction_count": 1,
+                },
+                "$set": {
+                    "updated_at": datetime.utcnow(),
+                    "last_transaction_date": datetime.utcnow(),
+                },
+            },
+        )
+
+    return {
+        "message": "Vendor procurement (bulk) recorded successfully",
+        "procurement_id": proc_id,
+        "receipt_number": receipt_number,
+        "items_count": len(resolved_items),
+        "total_amount": grand_total,
+        "credit_amount": credit_amount,
+        "payment_status": payment_status,
+    }
+
+
 @api_router.post("/vendor-procurement")
 async def create_vendor_procurement(procurement: VendorProcurementBase, current_user: dict = Depends(get_current_user)):
     """Record a purchase from a vendor"""
@@ -3862,24 +4099,51 @@ async def delete_vendor_procurement(
     outlet_id = procurement.get("outlet_id")
     product_id = procurement.get("product_id")
     quantity = procurement.get("quantity", 0)
+    items = procurement.get("items") or []
 
-    # 1. REVERSE STOCK (subtract received quantity at that outlet)
-    if product_id and product_id != "manual" and quantity > 0 and outlet_id:
-        stock = await db.stock.find_one({"outlet_id": outlet_id, "product_id": product_id})
-        if stock:
-            new_qty = max(0, (stock.get("quantity") or 0) - quantity)
-            new_received = max(0, (stock.get("stock_received") or 0) - quantity)
-            await db.stock.update_one(
-                {"id": stock["id"]},
-                {
-                    "$set": {
-                        "quantity": new_qty,
-                        "stock_received": new_received,
-                        "updated_at": datetime.utcnow(),
-                    }
-                },
-            )
-            reversal_details["stock_reversed"] = True
+    # 1. REVERSE STOCK
+    # Multi-item: loop each item and reverse its stock at the outlet.
+    # Legacy single-item: use top-level product_id + quantity.
+    if outlet_id:
+        if items:
+            stock_reversed_any = False
+            for it in items:
+                pid = it.get("product_id")
+                qty = it.get("quantity", 0) or 0
+                if not pid or pid == "manual" or qty <= 0:
+                    continue
+                stock = await db.stock.find_one({"outlet_id": outlet_id, "product_id": pid})
+                if stock:
+                    new_qty = max(0, (stock.get("quantity") or 0) - qty)
+                    new_received = max(0, (stock.get("stock_received") or 0) - qty)
+                    await db.stock.update_one(
+                        {"id": stock["id"]},
+                        {
+                            "$set": {
+                                "quantity": new_qty,
+                                "stock_received": new_received,
+                                "updated_at": datetime.utcnow(),
+                            }
+                        },
+                    )
+                    stock_reversed_any = True
+            reversal_details["stock_reversed"] = stock_reversed_any
+        elif product_id and product_id != "manual" and quantity > 0:
+            stock = await db.stock.find_one({"outlet_id": outlet_id, "product_id": product_id})
+            if stock:
+                new_qty = max(0, (stock.get("quantity") or 0) - quantity)
+                new_received = max(0, (stock.get("stock_received") or 0) - quantity)
+                await db.stock.update_one(
+                    {"id": stock["id"]},
+                    {
+                        "$set": {
+                            "quantity": new_qty,
+                            "stock_received": new_received,
+                            "updated_at": datetime.utcnow(),
+                        }
+                    },
+                )
+                reversal_details["stock_reversed"] = True
 
     # 2. REVERSE VENDOR LEDGER
     vendor_id = procurement.get("vendor_id")

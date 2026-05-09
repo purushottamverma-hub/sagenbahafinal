@@ -125,7 +125,24 @@ export default function PurchaseScreen() {
   // Auto-scroll refs & positions
   const modalScrollRef = useRef<ScrollView>(null);
   const afterVendorSectionY = useRef<number>(0);
+  const cartSectionY = useRef<number>(0);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ========== MULTI-PRODUCT CART (vendor procurement only) ==========
+  interface CartItem {
+    product_id: string; // 'manual' allowed
+    product_name: string;
+    product_unit: string;
+    variety_id?: string | null;
+    variety_name?: string | null;
+    quantity: number;
+    rate: number;
+    amount: number;
+    manual_product_name?: string | null;
+    manual_product_unit?: string | null;
+  }
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const cartTotal = useMemo(() => cart.reduce((s, it) => s + (it.amount || 0), 0), [cart]);
 
   const fetchData = async () => {
     try {
@@ -313,6 +330,83 @@ export default function PurchaseScreen() {
     }
   };
 
+  // ===== Cart helpers (vendor procurement multi-item) =====
+  const addToCart = () => {
+    // Validate the current product/qty/rate, then push to cart and reset product fields
+    if (!useManualProduct && !selectedProduct) {
+      Alert.alert(language === 'hi' ? 'त्रुटि' : 'Error', language === 'hi' ? 'उत्पाद चुनें' : 'Select product');
+      return;
+    }
+    if (useManualProduct && !manualProductName.trim()) {
+      Alert.alert(language === 'hi' ? 'त्रुटि' : 'Error', language === 'hi' ? 'उत्पाद नाम दर्ज करें' : 'Enter product name');
+      return;
+    }
+    if (!quantity || !rate) {
+      Alert.alert(language === 'hi' ? 'त्रुटि' : 'Error', language === 'hi' ? 'मात्रा और दर दर्ज करें' : 'Enter quantity and rate');
+      return;
+    }
+    if (!useManualProduct && selectedProduct) {
+      const prod = products.find((p) => p.id === selectedProduct);
+      if (prod?.varieties && prod.varieties.length > 0 && !selectedVariety) {
+        Alert.alert(
+          language === 'hi' ? 'त्रुटि' : 'Error',
+          language === 'hi' ? 'कृपया उत्पाद की किस्म चुनें' : 'Please select a product variety'
+        );
+        return;
+      }
+    }
+
+    const q = parseFloat(quantity || '0');
+    const r = parseFloat(rate || '0');
+    let item: CartItem;
+    if (useManualProduct) {
+      item = {
+        product_id: 'manual',
+        product_name: manualProductName.trim(),
+        product_unit: manualProductUnit || 'kg',
+        variety_id: null,
+        variety_name: null,
+        quantity: q,
+        rate: r,
+        amount: q * r,
+        manual_product_name: manualProductName.trim(),
+        manual_product_unit: manualProductUnit || 'kg',
+      };
+    } else {
+      const prod = products.find((p) => p.id === selectedProduct);
+      item = {
+        product_id: selectedProduct,
+        product_name: prod?.name || '',
+        product_unit: prod?.unit || 'kg',
+        variety_id: selectedVariety?.id || null,
+        variety_name: selectedVariety ? (selectedVariety.name_hi || selectedVariety.name) : null,
+        quantity: q,
+        rate: r,
+        amount: q * r,
+      };
+    }
+    setCart((prev) => [...prev, item]);
+
+    // Clear product/qty/rate so user can add another
+    setSelectedProduct('');
+    setSelectedVariety(null);
+    setQuantity('');
+    setRate('');
+    setProductSearch('');
+    setUseManualProduct(false);
+    setManualProductName('');
+    setManualProductUnit('kg');
+
+    // Auto-scroll to cart section
+    setTimeout(() => {
+      modalScrollRef.current?.scrollTo({ y: Math.max(0, cartSectionY.current - 16), animated: true });
+    }, 120);
+  };
+
+  const removeFromCart = (idx: number) => {
+    setCart((prev) => prev.filter((_, i) => i !== idx));
+  };
+
   const handleSubmit = async () => {
     // Validate outlet (always required)
     if (!selectedOutlet) {
@@ -320,19 +414,82 @@ export default function PurchaseScreen() {
       return;
     }
 
-    // For vendor purchases, require mandatory vendor selection (new flow)
+    // ===== VENDOR PROCUREMENT (multi-product cart) =====
+    // Manual vendor still uses single-item legacy flow below.
     if (sourceType === 'vendor' && !useManualSource) {
       if (vendorSelectionMode !== 'confirmed' || !confirmedVendor) {
         Alert.alert(
-          language === 'hi' ? 'त्रुटि' : 'Error', 
-          language === 'hi' 
-            ? 'कृपया पहले विक्रेता चुनें। खरीद से पहले विक्रेता चयन आवश्यक है।' 
+          language === 'hi' ? 'त्रुटि' : 'Error',
+          language === 'hi'
+            ? 'कृपया पहले विक्रेता चुनें। खरीद से पहले विक्रेता चयन आवश्यक है।'
             : 'Please select a vendor first. Vendor selection is mandatory before purchase.'
         );
         return;
       }
+
+      if (cart.length === 0) {
+        Alert.alert(
+          language === 'hi' ? 'त्रुटि' : 'Error',
+          language === 'hi' ? 'कार्ट में कम से कम एक उत्पाद जोड़ें' : 'Add at least one product to cart'
+        );
+        return;
+      }
+
+      // Compute payment split based on cart total
+      const total = cartTotal;
+      let cashAmt = 0;
+      let onlineAmt = 0;
+      switch (paymentMode) {
+        case 'cash': cashAmt = total; break;
+        case 'online': onlineAmt = total; break;
+        case 'credit': break;
+        case 'partial':
+          cashAmt = parseFloat(cashAmount || '0');
+          onlineAmt = parseFloat(onlineAmount || '0');
+          break;
+      }
+
+      setLoading(true);
+      try {
+        await api.post('/vendor-procurement/bulk', {
+          vendor_id: confirmedVendor.id,
+          outlet_id: selectedOutlet,
+          items: cart.map((it) => ({
+            product_id: it.product_id,
+            quantity: it.quantity,
+            rate: it.rate,
+            variety_id: it.variety_id || null,
+            variety_name: it.variety_name || null,
+            manual_product_name: it.manual_product_name || null,
+            manual_product_unit: it.manual_product_unit || null,
+          })),
+          payment_mode: paymentMode,
+          cash_amount: cashAmt,
+          online_amount: onlineAmt,
+          notes: notes || null,
+        });
+
+        Alert.alert(
+          language === 'hi' ? 'सफल' : 'Success',
+          language === 'hi'
+            ? `खरीद दर्ज हुई — ${cart.length} उत्पाद, कुल ₹${total.toFixed(2)}`
+            : `Procurement recorded — ${cart.length} item(s), total ₹${total.toFixed(2)}`
+        );
+        setShowModal(false);
+        resetForm();
+        fetchData();
+      } catch (error: any) {
+        Alert.alert(
+          language === 'hi' ? 'त्रुटि' : 'Error',
+          error.response?.data?.detail || (language === 'hi' ? 'खरीद दर्ज करने में विफल' : 'Failed to record purchase')
+        );
+      } finally {
+        setLoading(false);
+      }
+      return;
     }
 
+    // ===== FARMER / MANUAL legacy single-item flow =====
     // Validate source (for farmer purchases or manual entry)
     if (sourceType === 'farmer' || useManualSource) {
       if (!useManualSource && !selectedSource) {
@@ -391,12 +548,11 @@ export default function PurchaseScreen() {
           outlet_id: selectedOutlet,
         });
       } else {
-        // Vendor procurement - use confirmedVendor from selection flow or manual entry
-        const vendorId = useManualSource ? 'manual' : (confirmedVendor?.id || selectedSource);
+        // Vendor procurement (manual vendor) - legacy single-item endpoint
         await api.post('/vendor-procurement', {
-          vendor_id: vendorId,
-          manual_vendor_name: useManualSource ? manualSourceName : null,
-          manual_vendor_mobile: useManualSource ? manualSourceMobile : null,
+          vendor_id: 'manual',
+          manual_vendor_name: manualSourceName,
+          manual_vendor_mobile: manualSourceMobile,
           product_id: useManualProduct ? 'manual' : selectedProduct,
           manual_product_name: useManualProduct ? manualProductName : null,
           manual_product_unit: useManualProduct ? manualProductUnit : null,
@@ -455,6 +611,8 @@ export default function PurchaseScreen() {
     setVendorSearch('');
     setVendorSearchResults([]);
     setNewVendorData({ name: '', mobile: '', address: '', village: '' });
+    // Reset cart
+    setCart([]);
   };
 
   const renderPurchase = ({ item }: { item: Purchase }) => (
@@ -1059,13 +1217,78 @@ export default function PurchaseScreen() {
                 </View>
               </View>
 
-              {/* Total Display */}
+              {/* Line item amount (always visible) */}
               <View style={styles.totalDisplay}>
                 <Text style={styles.totalDisplayLabel}>
-                  {language === 'hi' ? 'कुल राशि' : 'Total Amount'}
+                  {language === 'hi' ? 'इस पंक्ति की राशि' : 'Line Amount'}
                 </Text>
                 <Text style={styles.totalDisplayValue}>₹{totalAmount.toFixed(2)}</Text>
               </View>
+
+              {/* ====== VENDOR CART MODE: Add to Cart + Cart preview ====== */}
+              {sourceType === 'vendor' && !useManualSource && (
+                <View
+                  style={styles.cartBox}
+                  onLayout={(e) => { cartSectionY.current = e.nativeEvent.layout.y; }}
+                >
+                  <Button
+                    title={language === 'hi' ? '+ कार्ट में जोड़ें' : '+ Add to Cart'}
+                    onPress={addToCart}
+                    variant="outline"
+                    style={styles.addToCartBtn}
+                  />
+
+                  {cart.length > 0 && (
+                    <View style={styles.cartList}>
+                      <View style={styles.cartHeader}>
+                        <Text style={styles.cartHeaderText}>
+                          {language === 'hi' ? `कार्ट (${cart.length} उत्पाद)` : `Cart (${cart.length} item${cart.length === 1 ? '' : 's'})`}
+                        </Text>
+                        <TouchableOpacity onPress={() => setCart([])}>
+                          <Text style={styles.clearCartText}>
+                            {language === 'hi' ? 'कार्ट खाली करें' : 'Clear cart'}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                      {cart.map((it, idx) => (
+                        <View key={`${it.product_id}-${idx}`} style={styles.cartItem}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.cartItemName} numberOfLines={1}>
+                              {it.product_name}
+                              {it.variety_name ? ` · ${it.variety_name}` : ''}
+                            </Text>
+                            <Text style={styles.cartItemMeta}>
+                              {it.quantity} {it.product_unit} × ₹{it.rate.toFixed(2)} = ₹{it.amount.toFixed(2)}
+                            </Text>
+                          </View>
+                          <TouchableOpacity
+                            onPress={() => removeFromCart(idx)}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            style={styles.cartRemoveBtn}
+                          >
+                            <Ionicons name="trash-outline" size={20} color="#C62828" />
+                          </TouchableOpacity>
+                        </View>
+                      ))}
+
+                      <View style={styles.cartTotalRow}>
+                        <Text style={styles.cartTotalLabel}>
+                          {language === 'hi' ? 'कुल राशि' : 'Grand Total'}
+                        </Text>
+                        <Text style={styles.cartTotalValue}>₹{cartTotal.toFixed(2)}</Text>
+                      </View>
+                    </View>
+                  )}
+
+                  {cart.length === 0 && (
+                    <Text style={styles.emptyCartHint}>
+                      {language === 'hi'
+                        ? 'उत्पाद, मात्रा और दर भरें, फिर "कार्ट में जोड़ें" दबाएं। एक से अधिक उत्पाद जोड़े जा सकते हैं।'
+                        : 'Fill product, quantity & rate above, then tap "Add to Cart". You can add multiple products to one bill.'}
+                    </Text>
+                  )}
+                </View>
+              )}
 
               {/* Payment Mode */}
               <Text style={styles.label}>
@@ -1114,7 +1337,13 @@ export default function PurchaseScreen() {
               )}
 
               <Button
-                title={language === 'hi' ? 'खरीद दर्ज करें' : 'Record Purchase'}
+                title={
+                  sourceType === 'vendor' && !useManualSource
+                    ? (language === 'hi'
+                        ? `खरीद दर्ज करें (${cart.length} उत्पाद · ₹${cartTotal.toFixed(2)})`
+                        : `Record Procurement (${cart.length} item${cart.length === 1 ? '' : 's'} · ₹${cartTotal.toFixed(2)})`)
+                    : (language === 'hi' ? 'खरीद दर्ज करें' : 'Record Purchase')
+                }
                 onPress={handleSubmit}
                 loading={loading}
                 style={styles.submitBtn}
@@ -1364,5 +1593,84 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#7B1FA2',
     fontWeight: '600',
+  },
+  // ===== Cart styles =====
+  cartBox: {
+    marginTop: 12,
+    backgroundColor: '#F5F0F8',
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E1BEE7',
+  },
+  addToCartBtn: {
+    borderColor: '#7B1FA2',
+    marginBottom: 4,
+  },
+  cartList: {
+    marginTop: 10,
+  },
+  cartHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  cartHeaderText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#7B1FA2',
+  },
+  clearCartText: {
+    fontSize: 12,
+    color: '#C62828',
+    fontWeight: '500',
+  },
+  cartItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF',
+    padding: 10,
+    borderRadius: 8,
+    marginBottom: 6,
+    gap: 10,
+  },
+  cartItemName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+  },
+  cartItemMeta: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 2,
+  },
+  cartRemoveBtn: {
+    padding: 4,
+  },
+  cartTotalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 6,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#E1BEE7',
+  },
+  cartTotalLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+  },
+  cartTotalValue: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#7B1FA2',
+  },
+  emptyCartHint: {
+    fontSize: 12,
+    color: '#7B1FA2',
+    marginTop: 6,
+    fontStyle: 'italic',
   },
 });

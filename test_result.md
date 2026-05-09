@@ -356,6 +356,68 @@ backend:
         agent: "testing"
         comment: "All 5 sub-cases PASS. (2a) Admin GET ?type=sale&format=csv → 200, Content-Type=text/csv, header_cols=24 including {id, bill_number, items}, 20 data rows. items column JSON-encoded correctly (no list/dict serialization errors). (2b) Admin GET ?type=purchase&format=csv → 200, header_cols=29 including {id, receipt_number, vendor_id}, 5 data rows from db.vendor_procurement. (2c) Admin GET ?type=sale&format=json → 200 with {count:20, rows:[20 docs]}, no _id leakage. (2d) Non-admin (freshly registered farmer token) GET → 403 'Admin access required' (require_admin enforced). (2e) Date filter start_date=2099-01-01..end_date=2099-12-31 → count=0. Endpoint production-ready."
 
+  - task: "Vendor Procurement Bulk (Multi-Product Cart) (/api/vendor-procurement/bulk)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Tested via /app/backend_test.py — 42/42 checks PASS against live preview backend (https://transaction-mgmt-dev.preview.emergentagent.com).
+
+          Sub-test results:
+          [1] Setup: created TEST vendor "Bulk Vendor TEST_<uuid>" + 2 TEST products (one carrying a variety) on the active 'Sagen Baha FPO - Central Office' outlet — PASS.
+          [2] POST /api/vendor-procurement/bulk with 2 items @ payment_mode=credit (qty 5×80 + 3×120) → 200, items_count=2, total_amount=760, credit_amount=760, payment_status='credit' — PASS.
+              [2a] GET /api/vendor-procurement returned the bulk doc; items[] length 2 with quantity/rate/amount populated correctly per item; items[0].variety_id passed through verbatim — PASS.
+              [2b] GET /api/stock for the outlet showed p1 +5 and p2 +3 (0→5 and 0→3) — PASS.
+              [2c] GET /api/vendors/{vid}/ledger shows the transaction with items_count=2, items[] length 2, debit=760 (== total == procurement.credit_amount when full credit), description="Purchase (2 items) - Bulk Product TEST_<uuid>_A, Bulk Product TEST_<uuid>_B" — PASS. Note: the transaction object surfaces credit_amount as `debit` (no explicit credit_amount field on the transaction; this matches the existing ledger contract used by the frontend).
+              [2d] GET /api/reports/transactions?format=json&type=purchase emitted exactly 2 rows with reference == receipt_number (one row per item) — PASS.
+          [3] POST /api/vendor-procurement/bulk with 3 items (total=300) and payment_mode=partial, cash=90 + online=60 (sum=150=total/2) → 200, credit_amount=150, payment_status='credit', vendor.outstanding_dues incremented by exactly 150 — PASS.
+          [4] DELETE /api/vendor-procurement/{proc_id_2}?reason=test+reverse → 200, reversal_details.stock_reversed=true and vendor_ledger_adjusted=true. Stock for p1 reverted by 5 (8→3) and p2 by 3 (7→4); vendor.outstanding_dues reduced by 760, total_purchases by 760, transaction_count by 1 — PASS.
+          [5] Edge cases: items=[] → 400 'At least one item is required' — PASS; quantity=0 → 400 'Item quantity must be positive' — PASS; unknown product_id (random UUID) → 404 'Product <uuid> not found' — PASS.
+          [6] Regression: legacy POST /api/vendor-procurement (single item) → 200 with stock_updated=true; subsequent legacy DELETE /api/vendor-procurement/{id}?reason=... → 200 with reversal_details — PASS.
+          [7] Manual product item: POST /api/vendor-procurement/bulk with product_id="manual" + manual_product_name="Test Manual SKU" → 200; the resolved doc.items[0].product_name == "Test Manual SKU"; stock for p1 was unaffected (and no stock row created for the manual SKU) — PASS.
+
+          Cleanup: all TEST_<uuid> vendors and products soft-deleted via DELETE /api/vendors/{id} and DELETE /api/products/{id}. No live data mutated.
+
+          Endpoint is production-ready. No regressions observed in legacy /api/vendor-procurement, /api/vendor-procurement DELETE, /api/vendors/{id}/ledger, /api/reports/transactions, or /api/stock.
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW endpoint POST /api/vendor-procurement/bulk added in 'VENDOR PROCUREMENT' section.
+          Body schema (BulkProcurementCreate): { vendor_id (or 'manual'), outlet_id, items: [ {product_id (or 'manual'), quantity, rate, variety_id?, variety_name?, manual_product_name?, manual_product_unit?} ], payment_mode (cash|online|credit|partial), cash_amount, online_amount, notes?, manual_vendor_name?, manual_vendor_mobile? }
+          Behaviour:
+            1) Resolves vendor (real or 'manual') and outlet.
+            2) Iterates items, validates each, computes amount = qty*rate, accumulates grand_total.
+            3) Inserts ONE doc into db.vendor_procurement with `items: [...]`, single receipt_number (VPYYYYMMDDxxxx), total_amount, payment split, credit_amount, payment_status, is_multi_item=True, items_count.
+            4) For non-manual products, increments stock at outlet for each item; logs StockMovement per item.
+            5) For non-manual vendor, ledger update is ONE single increment of total_purchases / total_paid / outstanding_dues / transaction_count.
+          Also updated:
+            - delete_vendor_procurement now reverses stock per-item when items[] exists (legacy single-item path retained).
+            - report_transactions emits one CSV row per item for multi-item procurements; legacy single-item still emits one row.
+            - get_vendor_ledger description now lists product names (up to 3) plus '+N more' when items[] present, exposes items[] and items_count fields.
+
+          Test plan for testing agent:
+          1) Admin login (admin/admin123). Pick or create a TEST_<uuid>-prefixed vendor and use any active outlet.
+          2) POST /api/vendor-procurement/bulk with 2 items (different products, different rates, payment_mode=credit). Expect 200; receipt_number and items_count=2 returned; total_amount = sum of items.
+             Verify:
+              a) GET /api/vendor-procurement returns the bulk doc with items array length 2.
+              b) Stock at outlet incremented by qty1 for product1 and qty2 for product2 (read /api/stock).
+              c) /api/vendors/{vendor_id}/ledger shows transaction with items_count=2, description includes product names, total_amount matches, debit==credit_amount when payment_mode=credit.
+              d) /api/reports/transactions?format=json&type=purchase returns 2 rows for that receipt_number (one per item).
+          3) POST a 3-item bulk with payment_mode=partial (cash + online < total). Expect credit_amount > 0, payment_status='credit', vendor.outstanding_dues incremented by credit_amount only.
+          4) DELETE /api/vendor-procurement/{procurement_id}?reason=test reverse → reversal_details.stock_reversed=true for each product (stock back to baseline) and vendor_ledger_adjusted=true (dues fully reversed).
+          5) Edge cases: items=[] → 400; quantity<=0 → 400; unknown product_id → 404.
+          6) Regression: legacy POST /api/vendor-procurement (single item) still works exactly as before.
+          7) Manual product or manual vendor inside items also work.
+
+          IMPORTANT: This is a LIVE DB. Use TEST_<uuid> prefixed entities only. Do not mutate or delete existing real records.
+
+
 frontend:
   - task: "Admin Management Screen (Outlets, Products, Vendors, Customers, Farmers)"
     implemented: true
@@ -772,3 +834,23 @@ test_plan:
       6) GET /api/reports/raw?type=purchase&format=csv → 200 CSV dump.
       7) Non-admin (agent) hitting /api/reports/raw → 403.
       Do NOT delete or mutate live records. Read-only verification only.
+
+  - agent: "testing"
+    message: |
+      Vendor Procurement Bulk endpoint testing completed (May 9 2026). Test file: /app/backend_test.py — 42/42 PASS against live preview backend.
+
+      [1] Setup: created TEST_<uuid> vendor + 2 TEST products (one with a variety) on active outlet "Sagen Baha FPO - Central Office".
+      [2] POST /api/vendor-procurement/bulk (2 items, payment_mode=credit, qty 5×80 + 3×120) → 200; items_count=2; total_amount=760; payment_status=credit; credit_amount=760.
+          [2a] GET /api/vendor-procurement returned bulk doc with items[] length 2 and quantity/rate/amount populated; items[0].variety_id passed through.
+          [2b] /api/stock incremented p1 by 5 (0→5) and p2 by 3 (0→3) at the outlet.
+          [2c] /api/vendors/{vid}/ledger transaction has items_count=2, items[] length 2, debit=760 (== total == procurement.credit_amount on full credit), description contains both product names. NOTE: ledger transaction surfaces credit as `debit`; there is no separate `credit_amount` field on the ledger row (this matches the pre-existing ledger contract).
+          [2d] /api/reports/transactions?format=json&type=purchase returned exactly 2 rows where row.reference == receipt_number (one per item).
+      [3] POST /api/vendor-procurement/bulk (3 items, total=300) with payment_mode=partial cash=90+online=60 → credit_amount=150 (==total/2), payment_status=credit, vendor.outstanding_dues incremented by exactly 150.
+      [4] DELETE /api/vendor-procurement/{procurement_id}?reason=test+reverse → reversal_details.stock_reversed=true & vendor_ledger_adjusted=true. Stock at outlet reverted by qty1/qty2 for each product. vendor.outstanding_dues, total_purchases, transaction_count all reverted by procurement total/1.
+      [5] Edge cases: items=[] → 400 "At least one item is required"; quantity=0 → 400 "Item quantity must be positive"; unknown product_id → 404 "Product <uuid> not found".
+      [6] Regression: legacy POST /api/vendor-procurement (single item) → 200 with stock_updated=true; legacy DELETE /api/vendor-procurement/{id}?reason=... → 200 with reversal_details.
+      [7] Manual product item: POST /api/vendor-procurement/bulk with product_id="manual" + manual_product_name="Test Manual SKU" → 200; resolved doc.items[0].product_name == "Test Manual SKU"; stock NOT incremented for the manual item (and no stock row created).
+
+      Cleanup: all TEST_<uuid> vendors + products soft-deleted via existing DELETE endpoints. No live data mutated.
+
+      Endpoint is production-ready. No regressions in /api/vendor-procurement (legacy POST/DELETE), /api/vendors/{id}/ledger, /api/reports/transactions, or /api/stock.
