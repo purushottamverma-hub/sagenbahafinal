@@ -463,3 +463,205 @@ export const sharePurchaseReceiptAsPDF = async (data: Parameters<typeof generate
     });
   }
 };
+
+// ===================================================================
+// Vendor Procurement Bill (multi-item supported)
+// ===================================================================
+
+interface VendorProcurementItem {
+  product_name: string;
+  variety_name?: string | null;
+  quantity: number;
+  unit?: string;
+  rate: number;
+  amount: number;
+}
+
+interface VendorProcurementBillData {
+  receiptNumber: string;
+  date: string;
+  vendorName: string;
+  vendorMobile?: string;
+  vendorAddress?: string;
+  outletName?: string;
+  items: VendorProcurementItem[]; // 1+ items
+  totalAmount: number;
+  cashAmount?: number;
+  onlineAmount?: number;
+  creditAmount?: number;
+  paymentMode: string;
+  paymentStatus: string; // 'paid' | 'credit'
+  isCancelled?: boolean;
+  language: 'en' | 'hi';
+}
+
+export const generateVendorProcurementHTML = (data: VendorProcurementBillData): string => {
+  const t = translations[data.language];
+  const labels = data.language === 'hi'
+    ? {
+        title: 'खरीद रसीद (विक्रेता)',
+        receiptNo: 'रसीद नं',
+        vendor: 'विक्रेता',
+        address: 'पता',
+        outlet: 'आउटलेट',
+        product: 'उत्पाद',
+        variety: 'किस्म',
+        qty: 'मात्रा',
+        unit: 'इकाई',
+        rate: 'दर',
+        amount: 'राशि',
+        total: 'कुल राशि',
+        cash: 'नकद',
+        online: 'ऑनलाइन',
+        credit: 'उधार',
+        paid: 'भुगतान',
+        due: 'बकाया',
+        paymentMode: 'भुगतान मोड',
+        thankYou: 'विश्वास के लिए धन्यवाद!',
+        cancelled: 'रद्द किया गया',
+      }
+    : {
+        title: 'PROCUREMENT RECEIPT',
+        receiptNo: 'Receipt No',
+        vendor: 'Vendor',
+        address: 'Address',
+        outlet: 'Outlet',
+        product: 'Product',
+        variety: 'Variety',
+        qty: 'Qty',
+        unit: 'Unit',
+        rate: 'Rate',
+        amount: 'Amount',
+        total: 'Grand Total',
+        cash: 'Cash',
+        online: 'Online',
+        credit: 'Credit',
+        paid: 'Paid',
+        due: 'Due',
+        paymentMode: 'Payment Mode',
+        thankYou: 'Thank you for your trust!',
+        cancelled: 'CANCELLED',
+      };
+
+  const itemsHTML = data.items
+    .map((it) => `
+      <tr>
+        <td style="padding: 8px; border-bottom: 1px solid #eee;">
+          <div style="font-weight: 600;">${it.product_name}</div>
+          ${it.variety_name ? `<div style="font-size: 10px; color: #666;">${labels.variety}: ${it.variety_name}</div>` : ''}
+        </td>
+        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${it.quantity}${it.unit ? ' ' + it.unit : ''}</td>
+        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">₹${(it.rate || 0).toFixed(2)}</td>
+        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">₹${(it.amount || 0).toFixed(2)}</td>
+      </tr>`)
+    .join('');
+
+  const paid = (data.cashAmount || 0) + (data.onlineAmount || 0);
+  const due = (data.creditAmount || 0);
+
+  const cancelledBanner = data.isCancelled
+    ? `<div style="background: #FFEBEE; color: #C62828; padding: 8px; text-align: center; font-weight: bold; border: 2px dashed #C62828; margin-bottom: 12px;">${labels.cancelled}</div>`
+    : '';
+
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; padding: 18px; max-width: 420px; margin: 0 auto; color: #333; }
+        .header { text-align: center; padding-bottom: 12px; border-bottom: 2px solid #7B1FA2; margin-bottom: 12px; }
+        .company { font-size: 16px; font-weight: bold; color: #7B1FA2; }
+        .sub { font-size: 11px; color: #666; }
+        .title { background: #7B1FA2; color: #fff; padding: 8px; text-align: center; font-size: 14px; font-weight: bold; border-radius: 4px; margin: 12px 0; }
+        .row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 12px; }
+        .label { color: #666; }
+        .value { font-weight: 600; }
+        .vendor-box { background: #F5F0F8; padding: 10px; border-radius: 6px; margin: 10px 0; }
+        table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 12px; }
+        th { background: #f5f5f5; padding: 8px; text-align: left; font-weight: 600; border-bottom: 2px solid #ddd; }
+        th.center { text-align: center; }
+        th.right { text-align: right; }
+        .totals { margin-top: 12px; }
+        .total-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
+        .total-row.final { font-size: 16px; font-weight: bold; color: #7B1FA2; border-top: 2px solid #7B1FA2; padding-top: 8px; margin-top: 4px; }
+        .due-row { color: #D32F2F; }
+        .payment-mode { background: #F3E5F5; padding: 6px 12px; border-radius: 14px; display: inline-block; font-size: 12px; font-weight: 600; color: #7B1FA2; margin-top: 8px; }
+        .footer { text-align: center; margin-top: 18px; padding-top: 12px; border-top: 1px dashed #ddd; color: #888; font-size: 11px; }
+      </style>
+    </head>
+    <body>
+      ${cancelledBanner}
+      <div class="header">
+        <div class="company">${t.companyName}</div>
+        <div class="sub">${t.companySubtitle}</div>
+        <div class="sub">${t.address}</div>
+      </div>
+
+      <div class="title">${labels.title}</div>
+
+      <div class="row"><span class="label">${labels.receiptNo}:</span><span class="value">${data.receiptNumber}</span></div>
+      <div class="row"><span class="label">${t.date}:</span><span class="value">${data.date}</span></div>
+      ${data.outletName ? `<div class="row"><span class="label">${labels.outlet}:</span><span class="value">${data.outletName}</span></div>` : ''}
+
+      <div class="vendor-box">
+        <div class="row"><span class="label">${labels.vendor}:</span><span class="value">${data.vendorName}</span></div>
+        ${data.vendorMobile ? `<div class="row"><span class="label">${t.mobile}:</span><span class="value">${data.vendorMobile}</span></div>` : ''}
+        ${data.vendorAddress ? `<div class="row"><span class="label">${labels.address}:</span><span class="value">${data.vendorAddress}</span></div>` : ''}
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>${labels.product}</th>
+            <th class="center">${labels.qty}</th>
+            <th class="right">${labels.rate}</th>
+            <th class="right">${labels.amount}</th>
+          </tr>
+        </thead>
+        <tbody>${itemsHTML}</tbody>
+      </table>
+
+      <div class="totals">
+        <div class="total-row final">
+          <span>${labels.total}</span>
+          <span>₹${(data.totalAmount || 0).toFixed(2)}</span>
+        </div>
+        ${(data.cashAmount || 0) > 0 ? `<div class="total-row"><span>${labels.cash}</span><span>₹${(data.cashAmount || 0).toFixed(2)}</span></div>` : ''}
+        ${(data.onlineAmount || 0) > 0 ? `<div class="total-row"><span>${labels.online}</span><span>₹${(data.onlineAmount || 0).toFixed(2)}</span></div>` : ''}
+        ${paid > 0 ? `<div class="total-row"><span>${labels.paid}</span><span>₹${paid.toFixed(2)}</span></div>` : ''}
+        ${due > 0 ? `<div class="total-row due-row"><span>${labels.due}</span><span>₹${due.toFixed(2)}</span></div>` : ''}
+      </div>
+
+      <div style="text-align: center;">
+        <span class="payment-mode">${labels.paymentMode}: ${getPaymentModeText(data.paymentMode, t)}</span>
+      </div>
+
+      <div class="footer">
+        <p>${labels.thankYou}</p>
+        <p>${t.computerGenerated}</p>
+      </div>
+    </body>
+    </html>
+  `;
+};
+
+export const printVendorProcurement = async (data: VendorProcurementBillData): Promise<void> => {
+  const html = generateVendorProcurementHTML(data);
+  await Print.printAsync({ html });
+};
+
+export const shareVendorProcurementAsPDF = async (data: VendorProcurementBillData): Promise<void> => {
+  const html = generateVendorProcurementHTML(data);
+  const { uri } = await Print.printToFileAsync({ html });
+
+  if (await Sharing.isAvailableAsync()) {
+    await Sharing.shareAsync(uri, {
+      mimeType: 'application/pdf',
+      dialogTitle: `Receipt ${data.receiptNumber}`,
+      UTI: 'com.adobe.pdf',
+    });
+  }
+};

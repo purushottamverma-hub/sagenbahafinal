@@ -21,6 +21,7 @@ import { Card } from '../../src/components/Card';
 import { Button } from '../../src/components/Button';
 import { Input } from '../../src/components/Input';
 import api from '../../src/utils/api';
+import { printVendorProcurement, shareVendorProcurementAsPDF } from '../../src/utils/billGenerator';
 
 interface Farmer {
   id: string;
@@ -63,12 +64,34 @@ interface Purchase {
   source_name: string;
   product_name: string;
   outlet_name: string;
+  outlet_id?: string;
   quantity: number;
   rate: number;
   total_amount: number;
   payment_status: string;
+  payment_mode?: string;
+  cash_amount?: number;
+  online_amount?: number;
+  credit_amount?: number;
   receipt_number: string;
   created_at: string;
+  // Multi-item bulk procurement support
+  items?: Array<{
+    product_name: string;
+    variety_name?: string | null;
+    product_unit?: string;
+    quantity: number;
+    rate: number;
+    amount: number;
+  }>;
+  // Vendor info (for procurement bills)
+  vendor_id?: string;
+  vendor_name?: string;
+  manual_vendor_name?: string;
+  manual_vendor_mobile?: string;
+  // Variety on legacy single-item
+  variety_name?: string | null;
+  is_deleted?: boolean;
 }
 
 export default function PurchaseScreen() {
@@ -615,6 +638,70 @@ export default function PurchaseScreen() {
     setCart([]);
   };
 
+  // ===== Print/Share Vendor Procurement Bill =====
+  const buildBillData = (item: Purchase) => {
+    // Find vendor from list to get full details (mobile/address)
+    const vendorMatch = vendors.find((v) => v.id === item.vendor_id);
+    const vendorName = item.vendor_name || item.manual_vendor_name || vendorMatch?.name || item.source_name || '-';
+    const vendorMobile = vendorMatch?.mobile || item.manual_vendor_mobile || '';
+    const vendorAddress = vendorMatch?.address || vendorMatch?.village || '';
+
+    // Build items array — multi-item if items present; otherwise wrap legacy single item
+    const itemsArr = (item.items && item.items.length > 0)
+      ? item.items.map((it: any) => ({
+          product_name: it.product_name || '-',
+          variety_name: it.variety_name || null,
+          unit: it.product_unit || it.manual_product_unit || 'kg',
+          quantity: it.quantity || 0,
+          rate: it.rate || 0,
+          amount: it.amount || ((it.quantity || 0) * (it.rate || 0)),
+        }))
+      : [{
+          product_name: item.product_name || '-',
+          variety_name: item.variety_name || null,
+          unit: 'kg',
+          quantity: item.quantity || 0,
+          rate: item.rate || 0,
+          amount: item.total_amount || 0,
+        }];
+
+    return {
+      receiptNumber: item.receipt_number || '-',
+      date: new Date(item.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+      vendorName,
+      vendorMobile,
+      vendorAddress,
+      outletName: item.outlet_name || '',
+      items: itemsArr,
+      totalAmount: item.total_amount || 0,
+      cashAmount: item.cash_amount || 0,
+      onlineAmount: item.online_amount || 0,
+      creditAmount: item.credit_amount || 0,
+      paymentMode: item.payment_mode || (item.payment_status === 'paid' ? 'cash' : 'credit'),
+      paymentStatus: item.payment_status || 'paid',
+      isCancelled: !!item.is_deleted,
+      language,
+    };
+  };
+
+  const handlePrintProcurement = async (item: Purchase) => {
+    try {
+      const bill = buildBillData(item);
+      await printVendorProcurement(bill as any);
+    } catch (e: any) {
+      Alert.alert(language === 'hi' ? 'त्रुटि' : 'Error', e.message || 'Failed to print');
+    }
+  };
+
+  const handleShareProcurement = async (item: Purchase) => {
+    try {
+      const bill = buildBillData(item);
+      await shareVendorProcurementAsPDF(bill as any);
+    } catch (e: any) {
+      Alert.alert(language === 'hi' ? 'त्रुटि' : 'Error', e.message || 'Failed to share');
+    }
+  };
+
   const renderPurchase = ({ item }: { item: Purchase }) => (
     <Card style={styles.purchaseCard}>
       <View style={styles.purchaseHeader}>
@@ -678,7 +765,27 @@ export default function PurchaseScreen() {
 
       <View style={styles.purchaseFooter}>
         <Text style={styles.receiptNum}>{item.receipt_number}</Text>
-        <Text style={styles.totalAmount}>₹{item.total_amount?.toFixed(2) || '0.00'}</Text>
+        <View style={styles.actionsRow}>
+          {item.source_type === 'vendor' && (
+            <>
+              <TouchableOpacity
+                style={styles.actionIconBtn}
+                onPress={() => handlePrintProcurement(item)}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <Ionicons name="print-outline" size={18} color="#7B1FA2" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.actionIconBtn}
+                onPress={() => handleShareProcurement(item)}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <Ionicons name="share-social-outline" size={18} color="#7B1FA2" />
+              </TouchableOpacity>
+            </>
+          )}
+          <Text style={styles.totalAmount}>₹{item.total_amount?.toFixed(2) || '0.00'}</Text>
+        </View>
       </View>
     </Card>
   );
@@ -1379,6 +1486,8 @@ const styles = StyleSheet.create({
   purchaseFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderTopWidth: 1, borderTopColor: '#E0E0E0', paddingTop: 12, marginTop: 8 },
   receiptNum: { fontSize: 12, color: '#666' },
   totalAmount: { fontSize: 18, fontWeight: 'bold', color: '#2E7D32' },
+  actionsRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  actionIconBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F3E5F5', justifyContent: 'center', alignItems: 'center' },
   emptyState: { alignItems: 'center', paddingVertical: 60 },
   emptyText: { fontSize: 16, color: '#999', marginTop: 16 },
   modalSafe: { flex: 1, backgroundColor: '#F5F5F5' },

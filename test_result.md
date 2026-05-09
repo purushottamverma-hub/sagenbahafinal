@@ -854,3 +854,13 @@ test_plan:
       Cleanup: all TEST_<uuid> vendors + products soft-deleted via existing DELETE endpoints. No live data mutated.
 
       Endpoint is production-ready. No regressions in /api/vendor-procurement (legacy POST/DELETE), /api/vendors/{id}/ledger, /api/reports/transactions, or /api/stock.
+
+
+  - agent: "main"
+    message: |
+      Procurement Bills (Print/Share) — frontend-only enhancement, no backend changes.
+      Files changed:
+      - /app/frontend/src/utils/billGenerator.ts (added generateVendorProcurementHTML, printVendorProcurement, shareVendorProcurementAsPDF — multi-item supported, branded for "Sagen Baha", purple theme, cancellation banner)
+      - /app/frontend/app/(admin)/purchase.tsx (added handlers handlePrintProcurement / handleShareProcurement; per-card 🖨/📤 icon buttons in the procurement card footer for vendor-source items only; Purchase interface widened to include items[] / vendor_id / vendor_name / payment_mode / cash/online/credit amounts / variety_name / is_deleted)
+
+      No backend changes. No tests required by main agent here — purely UI. User to verify by tapping Print/Share on any vendor procurement card.
