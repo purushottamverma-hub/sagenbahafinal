@@ -19,7 +19,7 @@ import { Button } from '../../src/components/Button';
 import { Input } from '../../src/components/Input';
 import { useTranslation } from '../../src/utils/useTranslation';
 import api from '../../src/utils/api';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, router } from 'expo-router';
 
 interface Customer {
   id: string;
@@ -410,9 +410,18 @@ export default function KhataScreen() {
         <Text style={styles.title}>
           {language === 'hi' ? 'खाता (Khata)' : 'Customer Ledger'}
         </Text>
-        <TouchableOpacity style={styles.addBtn} onPress={openAddCustomer}>
-          <Ionicons name="add" size={24} color="#FFF" />
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <TouchableOpacity
+            style={[styles.addBtn, { backgroundColor: '#7B1FA2' }]}
+            onPress={() => router.push('/(admin)/vendor-khata' as any)}
+            accessibilityLabel="Vendor Khata"
+          >
+            <Ionicons name="storefront" size={20} color="#FFF" />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.addBtn} onPress={openAddCustomer}>
+            <Ionicons name="add" size={24} color="#FFF" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Total Dues Summary */}

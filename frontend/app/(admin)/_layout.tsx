@@ -130,6 +130,13 @@ export default function AdminLayout() {
         }}
       />
       <Tabs.Screen
+        name="vendor-khata"
+        options={{
+          href: null, // hidden tab; accessible from Khata screen
+          title: language === 'hi' ? 'विक्रेता खाता' : 'Vendor Khata',
+        }}
+      />
+      <Tabs.Screen
         name="notifications"
         options={{
           title: language === 'hi' ? 'सूचनाएं' : 'Alerts',
