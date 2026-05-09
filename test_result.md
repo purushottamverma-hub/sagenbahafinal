@@ -864,3 +864,60 @@ test_plan:
       - /app/frontend/app/(admin)/purchase.tsx (added handlers handlePrintProcurement / handleShareProcurement; per-card 🖨/📤 icon buttons in the procurement card footer for vendor-source items only; Purchase interface widened to include items[] / vendor_id / vendor_name / payment_mode / cash/online/credit amounts / variety_name / is_deleted)
 
       No backend changes. No tests required by main agent here — purely UI. User to verify by tapping Print/Share on any vendor procurement card.
+
+
+  - task: "Sales & Procurement EDIT endpoints (PUT /api/sales/{id}, PUT /api/vendor-procurement/{id})"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Tested via /app/backend_test.py against live preview backend — 62/62 checks PASS. Used TEST_<uuid> prefixed entities only; all test artifacts soft-deleted at end. No live data mutated.
+
+          PUT /api/sales/{sale_id}:
+            • 2a Created credit sale (qty=2, rate=100, total=200) → 200; sale_id captured.
+            • 2b customer.outstanding_balance += 200; stock(P1) -= 2.
+            • 2c PUT same items but qty=5/total=500/credit=500 → 200; sale.is_edited=true; edit_history length=1.
+            • 2d customer.outstanding_balance == baseline+500; stock(P1) == baseline-5.
+            • 2e PUT payment_mode=cash, cash_amount=500, credit_amount=0 → 200; outstanding back to baseline; total_paid == baseline+500; edit_history length=2.
+            • 2f Insufficient-stock rollback: PUT qty=999999 → 400 with detail "Insufficient stock for <product>". Sale doc, customer ledger, and stock all unchanged after the failed PUT (verified via re-fetch).
+            • 2g Non-existent sale_id → 404 "Sale not found"; after DELETE /api/sales/{id} the PUT → 400 "Cannot edit a deleted/cancelled transaction".
+
+          PUT /api/vendor-procurement/{procurement_id}:
+            • 3a POST bulk credit procurement (P1 qty=10@50, P2 qty=5@80, total=900) → 200; procurement_id captured.
+            • 3b stock(P1)+=10, stock(P2)+=5; vendor.outstanding_dues+=900; vendor.total_purchases+=900.
+            • 3c PUT swap to single item P1 qty=2@200, payment_mode=cash, cash_amount=400 → 200; items_count=1; payment_status="paid"; credit_amount=0; total_amount=400.
+            • 3d Net stock vs vendor-baseline: P1 = +2 (10 reversed, 2 reapplied); P2 = 0 (fully reversed since not in new items).
+            • 3e vendor.outstanding_dues back to baseline; vendor.total_purchases delta = +400; vendor.transaction_count delta = +1 (one in, one out, then one in net = +1).
+            • 3f Re-fetched procurement doc: is_edited=true, items_count=1, edit_history length=1.
+            • 3g PUT items=[] → 400 "At least one item is required"; PUT non-existent id → 404 "Procurement not found".
+
+          Cleanup verified: TEST procurement (post-edit) deleted → 200; seed procurement deleted → 200; TEST vendor → soft-delete 200; TEST customer → 200; both TEST products → 200. Endpoints production-ready.
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Two new admin-only endpoints with 30-day limit. Both follow REVERSE-OLD then APPLY-NEW pattern, in-place doc update with edit_history[] push and is_edited/last_edited_at/last_edited_by/last_edit_reason fields.
+
+          PUT /api/sales/{sale_id}
+            Body: SaleCreate (same shape as POST /api/sales)
+            Query: ?reason=<string>
+            Behaviour:
+              1) 404 if not found; 400 if is_deleted; 400 if >30 days old.
+              2) Reverse OLD stock at OLD outlet for each item (qty back, stock_sold decrement).
+              3) Reverse OLD customer ledger (total_purchases -=, total_credit -= if any, outstanding_balance -= old_credit, total_paid -= old_paid, transaction_count -=1).
+              4) Validate NEW stock (rollback reversal if insufficient → 400).
+              5) Apply NEW stock + customer ledger.
+              6) Update doc in place keeping id/bill_number/created_at; add edit_history entry with snapshot.
+
+          PUT /api/vendor-procurement/{procurement_id}
+            Body: BulkProcurementCreate (multi-item)
+            Query: ?reason=<string>
+            Behaviour: same pattern as sales but for vendor procurement; legacy single-item synthesized for reversal.
+
+          Test plan: see backend_test.py creation. Use admin/admin123. Use TEST_<uuid> entities only. Do not mutate live data.
+          Required cases: 1) Edit sale qty (verify ledger & stock deltas), 2) Edit sale payment mode credit→cash, 3) Insufficient stock rollback, 4) Edit procurement to swap items+payment to cash, 5) Edit edge cases (items=[] → 400, non-existent id → 404, deleted doc → 400).

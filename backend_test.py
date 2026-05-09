@@ -1,436 +1,623 @@
 """
-Backend tests for the new POST /api/vendor-procurement/bulk endpoint and the
-related downstream behaviours (ledger, stock, transactions report, deletion).
+Backend test for the two new admin-only EDIT endpoints:
+  PUT /api/sales/{sale_id}
+  PUT /api/vendor-procurement/{procurement_id}
 
-LIVE production DB — uses TEST_<uuid> prefixed entities, leaves real data alone.
+Strategy:
+- Use TEST_<uuid> prefixed entities only.
+- Soft-delete TEST entities at the end, never touch live data.
+- Capture baselines AFTER the seed step for both customer and vendor totals.
 """
+
 import os
 import sys
-import json
 import uuid
-import time
+import json
 import requests
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
 
-BASE = os.environ.get(
-    "BACKEND_BASE",
-    "https://transaction-mgmt-dev.preview.emergentagent.com",
-).rstrip("/")
+
+# -------------------- Config --------------------
+def _read_backend_url() -> str:
+    env_path = "/app/frontend/.env"
+    with open(env_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("EXPO_PUBLIC_BACKEND_URL="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    raise RuntimeError("EXPO_PUBLIC_BACKEND_URL missing in /app/frontend/.env")
+
+
+BASE = _read_backend_url().rstrip("/")
 API = f"{BASE}/api"
-
 ADMIN_USER = "admin"
 ADMIN_PASS = "admin123"
 
-PASS_LIST: List[str] = []
-FAIL_LIST: List[str] = []
+results: List[Dict[str, Any]] = []
+failures: List[str] = []
 
 
-def _log(label: str, ok: bool, detail: str = ""):
-    line = f"{'PASS' if ok else 'FAIL'} :: {label}"
-    if detail:
-        line += f" — {detail}"
-    print(line)
-    (PASS_LIST if ok else FAIL_LIST).append(line)
+def _record(name: str, ok: bool, info: str = "") -> bool:
+    status = "PASS" if ok else "FAIL"
+    line = f"[{status}] {name}" + (f" — {info}" if info else "")
+    print(line, flush=True)
+    results.append({"name": name, "ok": ok, "info": info})
+    if not ok:
+        failures.append(line)
+    return ok
 
 
-def _login() -> str:
-    r = requests.post(f"{API}/auth/login", json={"username": ADMIN_USER, "password": ADMIN_PASS}, timeout=30)
+def _assert(cond: bool, name: str, info: str = "") -> bool:
+    return _record(name, bool(cond), info)
+
+
+def _approx_equal(a: float, b: float, tol: float = 0.001) -> bool:
+    try:
+        return abs(float(a) - float(b)) <= tol
+    except Exception:
+        return False
+
+
+# -------------------- HTTP helpers --------------------
+def _login(username: str, password: str) -> str:
+    r = requests.post(
+        f"{API}/auth/login",
+        json={"username": username, "password": password},
+        timeout=30,
+    )
     r.raise_for_status()
-    body = r.json()
-    tok = body.get("access_token") or body.get("token")
-    assert tok, f"no token in {body}"
-    return tok
+    return r.json()["access_token"]
 
 
-def _h(token: str) -> Dict[str, str]:
+def _hdr(token: str) -> Dict[str, str]:
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 
-def _get_active_outlet(token: str) -> Dict[str, Any]:
-    r = requests.get(f"{API}/outlets", headers=_h(token), timeout=30)
-    r.raise_for_status()
-    outlets = [o for o in r.json() if o.get("is_active", True)]
-    assert outlets, "No active outlets present"
-    return outlets[0]
-
-
-def _get_active_products(token: str) -> List[Dict[str, Any]]:
-    r = requests.get(f"{API}/products", headers=_h(token), timeout=30)
-    r.raise_for_status()
-    return [p for p in r.json() if p.get("is_active", True)]
-
-
-def _create_test_vendor(token: str, suffix: str) -> Dict[str, Any]:
-    body = {
-        "name": f"Bulk Vendor TEST_{suffix}",
-        "mobile": "9000000000",
-        "address": "Test Lane",
-        "village": "Testpura",
-    }
-    r = requests.post(f"{API}/vendors", headers=_h(token), json=body, timeout=30)
-    r.raise_for_status()
-    out = r.json()
-    vid = out.get("id") or out.get("vendor_id")
-    assert vid, f"no vendor id: {out}"
-    return {"id": vid, "name": body["name"]}
-
-
-def _create_test_product(token: str, suffix: str, with_variety: bool = False) -> Dict[str, Any]:
-    body: Dict[str, Any] = {
-        "name": f"Bulk Product TEST_{suffix}",
-        "name_hi": f"बल्क उत्पाद TEST_{suffix}",
-        "unit": "kg",
-        "category": "produce",
-    }
-    if with_variety:
-        body["varieties"] = [{"name": "DefaultVar", "name_hi": "डिफ़ॉल्ट"}]
-    r = requests.post(f"{API}/products", headers=_h(token), json=body, timeout=30)
-    r.raise_for_status()
-    j = r.json()
-    pid = j.get("id") or j.get("product_id")
-    assert pid, f"no product id: {j}"
-    # Re-fetch to get full doc with variety IDs assigned
-    r2 = requests.get(f"{API}/products", headers=_h(token), timeout=30)
-    r2.raise_for_status()
-    full = next((x for x in r2.json() if x["id"] == pid), None)
-    assert full, "could not refetch product"
-    return full
-
-
-def _stock_for(token: str, product_id: str, outlet_id: str) -> float:
-    r = requests.get(f"{API}/stock", headers=_h(token), timeout=30)
-    r.raise_for_status()
-    for s in r.json():
-        if s.get("product_id") == product_id and s.get("outlet_id") == outlet_id:
-            return float(s.get("quantity", 0) or 0)
-    return 0.0
-
-
-def _vendor_doc(token: str, vid: str) -> Dict[str, Any]:
-    r = requests.get(f"{API}/vendors", headers=_h(token), timeout=30)
-    r.raise_for_status()
-    for v in r.json():
-        if v.get("id") == vid:
-            return v
-    return {}
-
-
-def _vendor_ledger(token: str, vid: str) -> Dict[str, Any]:
-    r = requests.get(f"{API}/vendors/{vid}/ledger", headers=_h(token), timeout=30)
+# -------------------- Helpers to fetch state --------------------
+def get_customer(token: str, cid: str) -> Dict[str, Any]:
+    r = requests.get(f"{API}/customers/{cid}", headers=_hdr(token), timeout=30)
     r.raise_for_status()
     return r.json()
 
 
-def _approx(a: float, b: float, tol: float = 0.01) -> bool:
-    return abs(float(a) - float(b)) <= tol
-
-
-def main():
-    suffix = uuid.uuid4().hex[:8]
-    print(f"=== Bulk Procurement Tests — TEST suffix {suffix} ===")
-    print(f"Base URL: {BASE}")
-
-    token = _login()
-    _log("admin login (admin/admin123)", True)
-
-    outlet = _get_active_outlet(token)
-    outlet_id = outlet["id"]
-    _log(f"picked outlet '{outlet.get('name')}'", True, f"id={outlet_id}")
-
-    # Create TEST vendor + 2 products (one with a variety)
-    vendor = _create_test_vendor(token, suffix)
-    vid = vendor["id"]
-    _log("created TEST vendor", True, f"id={vid}")
-
-    p1 = _create_test_product(token, f"{suffix}_A", with_variety=True)
-    p2 = _create_test_product(token, f"{suffix}_B", with_variety=False)
-    p1_id, p2_id = p1["id"], p2["id"]
-    var = (p1.get("varieties") or [{}])[0]
-    var_id = var.get("id")
-    var_name = var.get("name")
-    _log("created TEST products", True, f"p1={p1_id} (variety_id={var_id}) p2={p2_id}")
-
-    # Baseline state
-    base_v = _vendor_doc(token, vid)
-    base_outstanding = float(base_v.get("outstanding_dues") or 0)
-    base_total_purchases = float(base_v.get("total_purchases") or 0)
-    base_txn_count = int(base_v.get("transaction_count") or 0)
-    base_stock_p1 = _stock_for(token, p1_id, outlet_id)
-    base_stock_p2 = _stock_for(token, p2_id, outlet_id)
-
-    # =========================================================
-    # SUB-TEST 2: bulk POST with 2 items, payment_mode=credit
-    # =========================================================
-    qty1, rate1 = 5.0, 80.0
-    qty2, rate2 = 3.0, 120.0
-    expected_total = qty1 * rate1 + qty2 * rate2  # 400 + 360 = 760
-
-    payload2 = {
-        "vendor_id": vid,
-        "outlet_id": outlet_id,
-        "payment_mode": "credit",
-        "cash_amount": 0,
-        "online_amount": 0,
-        "items": [
-            {
-                "product_id": p1_id,
-                "quantity": qty1,
-                "rate": rate1,
-                "variety_id": var_id,
-                "variety_name": var_name,
-            },
-            {
-                "product_id": p2_id,
-                "quantity": qty2,
-                "rate": rate2,
-            },
-        ],
-    }
-    r = requests.post(f"{API}/vendor-procurement/bulk", headers=_h(token), json=payload2, timeout=30)
-    ok = r.status_code == 200
-    _log("[2] POST /vendor-procurement/bulk (2 items, credit) → 200", ok, f"status={r.status_code} body={r.text[:200]}")
-    if not ok:
-        _summary()
-        return
-    body2 = r.json()
-    proc_id_2 = body2["procurement_id"]
-    receipt_2 = body2["receipt_number"]
-    _log("[2] response carries procurement_id + receipt_number", bool(proc_id_2 and receipt_2), f"id={proc_id_2} rcpt={receipt_2}")
-    _log("[2] response items_count == 2", body2.get("items_count") == 2, f"got {body2.get('items_count')}")
-    _log("[2] response total_amount == 760", _approx(body2.get("total_amount", 0), expected_total), f"got {body2.get('total_amount')}")
-    _log("[2] response payment_status == 'credit'", body2.get("payment_status") == "credit", f"got {body2.get('payment_status')}")
-    _log("[2] response credit_amount == total", _approx(body2.get("credit_amount", 0), expected_total))
-
-    # 2a) GET /vendor-procurement returns items array length 2
-    r = requests.get(f"{API}/vendor-procurement", headers=_h(token), timeout=30)
+def get_vendor(token: str, vid: str) -> Dict[str, Any]:
+    r = requests.get(f"{API}/vendors/{vid}", headers=_hdr(token), timeout=30)
     r.raise_for_status()
-    rows = r.json()
-    bulk_doc = next((x for x in rows if x.get("id") == proc_id_2), None)
-    _log("[2a] bulk doc retrievable via GET /vendor-procurement", bool(bulk_doc))
-    if bulk_doc:
-        items = bulk_doc.get("items") or []
-        _log("[2a] items array length == 2", len(items) == 2, f"len={len(items)}")
-        if len(items) == 2:
-            i0, i1 = items[0], items[1]
-            checks_ok = (
-                _approx(i0.get("quantity", 0), qty1)
-                and _approx(i0.get("rate", 0), rate1)
-                and _approx(i0.get("amount", 0), qty1 * rate1)
-                and _approx(i1.get("quantity", 0), qty2)
-                and _approx(i1.get("rate", 0), rate2)
-                and _approx(i1.get("amount", 0), qty2 * rate2)
-            )
-            _log("[2a] items[*].quantity/rate/amount populated correctly", checks_ok, json.dumps([i0, i1])[:300])
-            _log("[2a] items[0].variety_id passed-through", i0.get("variety_id") == var_id, f"got {i0.get('variety_id')}")
+    return r.json()
 
-    # 2b) Stock incremented
-    s1_after = _stock_for(token, p1_id, outlet_id)
-    s2_after = _stock_for(token, p2_id, outlet_id)
-    _log("[2b] stock p1 incremented by qty1", _approx(s1_after, base_stock_p1 + qty1), f"{base_stock_p1} → {s1_after}")
-    _log("[2b] stock p2 incremented by qty2", _approx(s2_after, base_stock_p2 + qty2), f"{base_stock_p2} → {s2_after}")
 
-    # 2c) Vendor ledger transaction
-    led = _vendor_ledger(token, vid)
-    txns = led.get("transactions") or []
-    txn = next((t for t in txns if (t.get("reference") == receipt_2 or t.get("transaction_id") == proc_id_2 or t.get("id") == proc_id_2)), None)
-    _log("[2c] vendor ledger contains transaction for receipt", bool(txn), f"matched? {bool(txn)} transactions={len(txns)}")
-    if txn:
-        _log("[2c] transaction items_count==2", txn.get("items_count") == 2, f"got {txn.get('items_count')}")
-        _log("[2c] transaction items array length==2", len(txn.get("items") or []) == 2, f"len={len(txn.get('items') or [])}")
-        # On full-credit purchase, ledger's `debit` should equal the procurement's
-        # credit_amount (760) and the procurement's total (760).
-        debit = float(txn.get("debit") or 0)
-        total_amt = float(txn.get("total_amount") or 0)
-        _log("[2c] debit == total == credit_amount of procurement (full credit)",
-             _approx(debit, expected_total) and _approx(total_amt, expected_total),
-             f"debit={debit} total_amount={total_amt} expected={expected_total}")
-        desc = (txn.get("description") or "").lower()
-        contains = (p1["name"].lower() in desc) or (p2["name"].lower() in desc)
-        _log("[2c] description includes a product name", contains, f"desc='{txn.get('description')}'")
-
-    # 2d) Reports/transactions returns 2 rows for receipt
-    r = requests.get(f"{API}/reports/transactions", headers=_h(token),
-                     params={"format": "json", "type": "purchase"}, timeout=60)
-    r.raise_for_status()
-    rep = r.json()
-    rows_rep = rep.get("rows") or []
-    matching = [row for row in rows_rep if row.get("reference") == receipt_2]
-    _log("[2d] reports/transactions has >=2 rows for the receipt", len(matching) >= 2, f"matching rows={len(matching)}")
-
-    # =========================================================
-    # SUB-TEST 3: 3 items partial payment, credit_amount==total/2
-    # =========================================================
-    base_v_pre3 = _vendor_doc(token, vid)
-    pre_outstanding_3 = float(base_v_pre3.get("outstanding_dues") or 0)
-
-    items3 = [
-        {"product_id": p1_id, "quantity": 2.0, "rate": 50.0},
-        {"product_id": p2_id, "quantity": 4.0, "rate": 25.0},
-        {"product_id": p1_id, "quantity": 1.0, "rate": 100.0},
-    ]
-    total3 = 100.0 + 100.0 + 100.0  # 300
-    half = total3 / 2.0
-    payload3 = {
-        "vendor_id": vid,
-        "outlet_id": outlet_id,
-        "payment_mode": "partial",
-        "cash_amount": half * 0.6,  # 90
-        "online_amount": half * 0.4,  # 60 — sum=150 (half of 300)
-        "items": items3,
-    }
-    r = requests.post(f"{API}/vendor-procurement/bulk", headers=_h(token), json=payload3, timeout=30)
-    ok3 = r.status_code == 200
-    _log("[3] partial payment bulk (3 items) → 200", ok3, f"status={r.status_code} body={r.text[:200]}")
-    if ok3:
-        body3 = r.json()
-        proc_id_3 = body3["procurement_id"]
-        _log("[3] credit_amount == total/2", _approx(body3.get("credit_amount", 0), half), f"got {body3.get('credit_amount')} expected {half}")
-        _log("[3] payment_status == 'credit'", body3.get("payment_status") == "credit", f"got {body3.get('payment_status')}")
-        v_after_3 = _vendor_doc(token, vid)
-        delta = float(v_after_3.get("outstanding_dues") or 0) - pre_outstanding_3
-        _log("[3] vendor.outstanding_dues incremented by exactly credit_amount",
-             _approx(delta, half), f"Δ={delta} expected {half}")
-    else:
-        proc_id_3 = None
-
-    # =========================================================
-    # SUB-TEST 4: DELETE the SUB-TEST 2 procurement
-    # =========================================================
-    pre_del_v = _vendor_doc(token, vid)
-    pre_del_outstanding = float(pre_del_v.get("outstanding_dues") or 0)
-    pre_del_total_purch = float(pre_del_v.get("total_purchases") or 0)
-    pre_del_txn_count = int(pre_del_v.get("transaction_count") or 0)
-    pre_del_s1 = _stock_for(token, p1_id, outlet_id)
-    pre_del_s2 = _stock_for(token, p2_id, outlet_id)
-
-    r = requests.delete(
-        f"{API}/vendor-procurement/{proc_id_2}",
-        headers=_h(token),
-        params={"reason": "test reverse"},
+def get_stock_qty(token: str, product_id: str, outlet_id: str) -> float:
+    r = requests.get(
+        f"{API}/stock",
+        headers=_hdr(token),
+        params={"outlet_id": outlet_id},
         timeout=30,
     )
-    ok_del = r.status_code == 200
-    _log("[4] DELETE /vendor-procurement/{id}?reason=... → 200", ok_del, f"status={r.status_code} body={r.text[:200]}")
-    if ok_del:
-        rd = r.json().get("reversal_details") or {}
-        _log("[4] reversal_details.stock_reversed == True", rd.get("stock_reversed") is True, json.dumps(rd))
-        _log("[4] reversal_details.vendor_ledger_adjusted == True", rd.get("vendor_ledger_adjusted") is True)
+    r.raise_for_status()
+    rows = r.json()
+    for s in rows:
+        if s.get("product_id") == product_id and s.get("outlet_id") == outlet_id:
+            return float(s.get("quantity") or 0)
+    return 0.0
 
-        s1_post = _stock_for(token, p1_id, outlet_id)
-        s2_post = _stock_for(token, p2_id, outlet_id)
-        _log("[4] stock p1 reverted by qty1", _approx(s1_post, pre_del_s1 - qty1), f"{pre_del_s1} → {s1_post} expected -{qty1}")
-        _log("[4] stock p2 reverted by qty2", _approx(s2_post, pre_del_s2 - qty2), f"{pre_del_s2} → {s2_post} expected -{qty2}")
 
-        v_post = _vendor_doc(token, vid)
-        _log("[4] vendor.outstanding_dues reverted by expected_total (full credit)",
-             _approx(float(v_post.get("outstanding_dues") or 0), pre_del_outstanding - expected_total),
-             f"{pre_del_outstanding} → {v_post.get('outstanding_dues')} expected -{expected_total}")
-        _log("[4] vendor.total_purchases reverted by total",
-             _approx(float(v_post.get("total_purchases") or 0), pre_del_total_purch - expected_total),
-             f"{pre_del_total_purch} → {v_post.get('total_purchases')}")
-        _log("[4] vendor.transaction_count reverted by 1",
-             int(v_post.get("transaction_count") or 0) == pre_del_txn_count - 1,
-             f"{pre_del_txn_count} → {v_post.get('transaction_count')}")
+# -------------------- Main test --------------------
+def main() -> int:
+    print(f"Backend base: {BASE}")
+    token = _login(ADMIN_USER, ADMIN_PASS)
+    _record("Admin login", bool(token))
+    H = _hdr(token)
 
-    # =========================================================
-    # SUB-TEST 5: edge cases
-    # =========================================================
-    r = requests.post(f"{API}/vendor-procurement/bulk", headers=_h(token),
-                      json={"vendor_id": vid, "outlet_id": outlet_id, "payment_mode": "cash", "items": []}, timeout=30)
-    _log("[5a] items=[] → 400", r.status_code == 400, f"status={r.status_code} body={r.text[:200]}")
-
-    r = requests.post(f"{API}/vendor-procurement/bulk", headers=_h(token),
-                      json={"vendor_id": vid, "outlet_id": outlet_id, "payment_mode": "cash",
-                            "items": [{"product_id": p1_id, "quantity": 0, "rate": 50}]}, timeout=30)
-    _log("[5b] item.quantity=0 → 400", r.status_code == 400, f"status={r.status_code} body={r.text[:200]}")
-
-    bogus = str(uuid.uuid4())
-    r = requests.post(f"{API}/vendor-procurement/bulk", headers=_h(token),
-                      json={"vendor_id": vid, "outlet_id": outlet_id, "payment_mode": "cash",
-                            "items": [{"product_id": bogus, "quantity": 1, "rate": 10}]}, timeout=30)
-    _log("[5c] unknown product_id → 404 mentioning Product",
-         r.status_code == 404 and ("product" in r.text.lower()),
-         f"status={r.status_code} body={r.text[:200]}")
-
-    # =========================================================
-    # SUB-TEST 6: legacy POST /vendor-procurement (single item)
-    # =========================================================
-    legacy_payload = {
-        "vendor_id": vid,
-        "outlet_id": outlet_id,
-        "product_id": p2_id,
-        "quantity": 2.0,
-        "rate": 30.0,
-        "payment_mode": "cash",
-        "cash_amount": 60.0,
-        "online_amount": 0,
+    tag = f"TEST_{uuid.uuid4().hex[:10]}"
+    created = {
+        "customer": None,
+        "vendor": None,
+        "products": [],
+        "sale": None,
+        "procurement": None,
     }
-    r = requests.post(f"{API}/vendor-procurement", headers=_h(token), json=legacy_payload, timeout=30)
-    ok_legacy = r.status_code == 200
-    _log("[6] legacy POST /vendor-procurement (single item) → 200", ok_legacy, f"status={r.status_code} body={r.text[:200]}")
-    if ok_legacy:
-        legacy_id = r.json().get("procurement_id") or r.json().get("id")
-        if legacy_id:
-            r2 = requests.delete(f"{API}/vendor-procurement/{legacy_id}", headers=_h(token),
-                                 params={"reason": "test legacy cleanup"}, timeout=30)
-            _log("[6] legacy DELETE /vendor-procurement/{id} → 200", r2.status_code == 200,
-                 f"status={r2.status_code} body={r2.text[:200]}")
 
-    # =========================================================
-    # SUB-TEST 7: manual product item — name resolution & no stock impact
-    # =========================================================
-    base_s1 = _stock_for(token, p1_id, outlet_id)
-    manual_payload = {
-        "vendor_id": vid,
-        "outlet_id": outlet_id,
-        "payment_mode": "cash",
-        "cash_amount": 50.0,
-        "online_amount": 0,
-        "items": [
-            {"product_id": "manual", "manual_product_name": "Test Manual SKU", "quantity": 1, "rate": 50.0},
-        ],
-    }
-    r = requests.post(f"{API}/vendor-procurement/bulk", headers=_h(token), json=manual_payload, timeout=30)
-    ok7 = r.status_code == 200
-    _log("[7] bulk with manual product → 200", ok7, f"status={r.status_code} body={r.text[:200]}")
-    if ok7:
-        proc_id_7 = r.json()["procurement_id"]
-        # Verify resolved item name
-        r2 = requests.get(f"{API}/vendor-procurement", headers=_h(token), timeout=30)
-        rows = r2.json()
-        doc7 = next((x for x in rows if x.get("id") == proc_id_7), None)
-        if doc7:
-            it = (doc7.get("items") or [{}])[0]
-            _log("[7] resolved item.product_name == 'Test Manual SKU'",
-                 it.get("product_name") == "Test Manual SKU",
-                 f"got {it.get('product_name')}")
-        # Stock unchanged for manual items (and p1 unaffected anyway)
-        s1_post7 = _stock_for(token, p1_id, outlet_id)
-        _log("[7] stock NOT incremented for manual item (p1 unchanged)",
-             _approx(s1_post7, base_s1), f"{base_s1} → {s1_post7}")
+    try:
+        # =============== 1) SETUP ===============
+        # Customer
+        cust_payload = {
+            "name": f"Ramesh Kumar {tag}",
+            "mobile": "9876512345",
+            "village": "Test Village",
+            "address": "Test Address",
+            "customer_type": "registered",
+        }
+        r = requests.post(f"{API}/customers", headers=H, json=cust_payload, timeout=30)
+        _assert(r.status_code == 200, "Create TEST customer", f"HTTP {r.status_code} {r.text[:200]}")
+        if r.status_code != 200:
+            return 1
+        customer = r.json()
+        created["customer"] = customer["id"]
 
-    _summary()
+        # Vendor
+        vend_payload = {
+            "name": f"Sharma Traders {tag}",
+            "mobile": "9112345678",
+            "village": "Vendor Village",
+            "address": "Vendor Addr",
+        }
+        r = requests.post(f"{API}/vendors", headers=H, json=vend_payload, timeout=30)
+        _assert(r.status_code == 200, "Create TEST vendor", f"HTTP {r.status_code} {r.text[:200]}")
+        if r.status_code != 200:
+            return 1
+        vendor = r.json()
+        created["vendor"] = vendor["id"]
 
+        # Two active products
+        for label, name in [("A", f"Wheat {tag}_A"), ("B", f"Rice {tag}_B")]:
+            r = requests.post(
+                f"{API}/products",
+                headers=H,
+                json={"name": name, "unit": "kg", "category": "produce", "is_active": True},
+                timeout=30,
+            )
+            _assert(r.status_code == 200, f"Create TEST product {label}", f"HTTP {r.status_code} {r.text[:200]}")
+            if r.status_code != 200:
+                return 1
+            created["products"].append(r.json())
 
-def _summary():
-    print()
-    print("=" * 60)
-    print(f"PASSED: {len(PASS_LIST)}")
-    print(f"FAILED: {len(FAIL_LIST)}")
-    if FAIL_LIST:
-        print("\nFailures:")
-        for f in FAIL_LIST:
-            print(" -", f)
-    print("=" * 60)
+        p1 = created["products"][0]
+        p2 = created["products"][1]
+
+        # Pick non-central active outlet
+        r = requests.get(f"{API}/outlets", headers=H, timeout=30)
+        r.raise_for_status()
+        outlets = r.json()
+        non_central = [o for o in outlets if not o.get("is_central") and o.get("is_active", True)]
+        _assert(len(non_central) > 0, "Locate non-central active outlet", f"found {len(non_central)}")
+        if not non_central:
+            return 1
+        outlet = non_central[0]
+        outlet_id = outlet["id"]
+
+        # Seed stock via bulk procurement (50 of each)
+        bulk_seed = {
+            "vendor_id": vendor["id"],
+            "outlet_id": outlet_id,
+            "items": [
+                {"product_id": p1["id"], "quantity": 50, "rate": 10},
+                {"product_id": p2["id"], "quantity": 50, "rate": 20},
+            ],
+            "payment_mode": "cash",
+            "cash_amount": 50 * 10 + 50 * 20,
+            "online_amount": 0,
+        }
+        r = requests.post(f"{API}/vendor-procurement/bulk", headers=H, json=bulk_seed, timeout=60)
+        _assert(r.status_code == 200, "Seed stock via bulk procurement", f"HTTP {r.status_code} {r.text[:200]}")
+        if r.status_code != 200:
+            return 1
+        seed_proc = r.json()
+        seed_proc_id = seed_proc.get("procurement_id")
+
+        # Capture BASELINES (post-seed) for customer and vendor and stock
+        customer = get_customer(token, created["customer"])
+        vendor = get_vendor(token, created["vendor"])
+        base_cust = {
+            "outstanding_balance": float(customer.get("outstanding_balance") or 0),
+            "total_paid": float(customer.get("total_paid") or 0),
+            "total_purchases": float(customer.get("total_purchases") or 0),
+            "total_credit": float(customer.get("total_credit") or 0),
+            "transaction_count": int(customer.get("transaction_count") or 0),
+        }
+        base_vend = {
+            "outstanding_dues": float(vendor.get("outstanding_dues") or 0),
+            "total_purchases": float(vendor.get("total_purchases") or 0),
+            "total_paid": float(vendor.get("total_paid") or 0),
+            "transaction_count": int(vendor.get("transaction_count") or 0),
+        }
+        base_p1_stock = get_stock_qty(token, p1["id"], outlet_id)
+        base_p2_stock = get_stock_qty(token, p2["id"], outlet_id)
+        _assert(base_p1_stock >= 50, "Baseline P1 stock seeded", f"qty={base_p1_stock}")
+        _assert(base_p2_stock >= 50, "Baseline P2 stock seeded", f"qty={base_p2_stock}")
+        print(f"BASELINES: cust={base_cust} vend={base_vend} p1_stock={base_p1_stock} p2_stock={base_p2_stock}")
+
+        # =============== 2) PUT /api/sales/{sale_id} ===============
+        # 2a. Create credit sale qty=2 rate=100 total=200
+        sale_body = {
+            "outlet_id": outlet_id,
+            "customer_id": created["customer"],
+            "customer_name": customer["name"],
+            "items": [{
+                "product_id": p1["id"],
+                "product_name": p1["name"],
+                "quantity": 2,
+                "rate": 100,
+                "amount": 200,
+            }],
+            "subtotal": 200,
+            "discount": 0,
+            "total_amount": 200,
+            "payment_mode": "credit",
+            "cash_amount": 0,
+            "online_amount": 0,
+            "credit_amount": 200,
+        }
+        r = requests.post(f"{API}/sales", headers=H, json=sale_body, timeout=30)
+        _assert(r.status_code == 200, "2a) POST /api/sales (credit 200)", f"HTTP {r.status_code} {r.text[:200]}")
+        if r.status_code != 200:
+            return 1
+        sale_resp = r.json()
+        sale_id = sale_resp.get("id") or sale_resp.get("sale_id")
+        if not sale_id and isinstance(sale_resp, dict):
+            sale_id = sale_resp.get("sale", {}).get("id")
+        _assert(bool(sale_id), "2a) Capture sale_id", f"got {sale_id}")
+        created["sale"] = sale_id
+
+        # 2b. Verify customer outstanding balance increased by 200 vs baseline; stock for P1 -=2
+        customer = get_customer(token, created["customer"])
+        p1_stock = get_stock_qty(token, p1["id"], outlet_id)
+        _assert(
+            _approx_equal(customer["outstanding_balance"], base_cust["outstanding_balance"] + 200),
+            "2b) outstanding_balance += 200",
+            f"got={customer['outstanding_balance']} expected={base_cust['outstanding_balance'] + 200}",
+        )
+        _assert(
+            _approx_equal(p1_stock, base_p1_stock - 2),
+            "2b) P1 stock -= 2",
+            f"got={p1_stock} expected={base_p1_stock - 2}",
+        )
+
+        # 2c. PUT same items but qty=5 total=500 credit=500
+        edit_body = {
+            "outlet_id": outlet_id,
+            "customer_id": created["customer"],
+            "customer_name": customer["name"],
+            "items": [{
+                "product_id": p1["id"],
+                "product_name": p1["name"],
+                "quantity": 5,
+                "rate": 100,
+                "amount": 500,
+            }],
+            "subtotal": 500,
+            "discount": 0,
+            "total_amount": 500,
+            "payment_mode": "credit",
+            "cash_amount": 0,
+            "online_amount": 0,
+            "credit_amount": 500,
+        }
+        r = requests.put(
+            f"{API}/sales/{sale_id}",
+            headers=H,
+            params={"reason": "qty correction"},
+            json=edit_body,
+            timeout=30,
+        )
+        _assert(r.status_code == 200, "2c) PUT /api/sales (qty 2->5)", f"HTTP {r.status_code} {r.text[:200]}")
+        if r.status_code != 200:
+            return 1
+        edit_resp = r.json()
+        sale_after = edit_resp.get("sale") or {}
+        _assert(sale_after.get("is_edited") is True, "2c) sale.is_edited == true", f"got={sale_after.get('is_edited')}")
+        eh = sale_after.get("edit_history") or []
+        _assert(len(eh) == 1, "2c) edit_history length == 1", f"got={len(eh)}")
+
+        # 2d. Verify customer.outstanding_balance == baseline + 500; stock for P1 == baseline - 5
+        customer = get_customer(token, created["customer"])
+        p1_stock = get_stock_qty(token, p1["id"], outlet_id)
+        _assert(
+            _approx_equal(customer["outstanding_balance"], base_cust["outstanding_balance"] + 500),
+            "2d) outstanding_balance == baseline + 500",
+            f"got={customer['outstanding_balance']}",
+        )
+        _assert(
+            _approx_equal(p1_stock, base_p1_stock - 5),
+            "2d) P1 stock == baseline - 5",
+            f"got={p1_stock} expected={base_p1_stock - 5}",
+        )
+
+        # 2e. PUT again with payment_mode='cash', cash_amount=500, credit_amount=0
+        edit_body2 = dict(edit_body)
+        edit_body2["payment_mode"] = "cash"
+        edit_body2["cash_amount"] = 500
+        edit_body2["online_amount"] = 0
+        edit_body2["credit_amount"] = 0
+        r = requests.put(
+            f"{API}/sales/{sale_id}",
+            headers=H,
+            params={"reason": "switch to cash"},
+            json=edit_body2,
+            timeout=30,
+        )
+        _assert(r.status_code == 200, "2e) PUT /api/sales (credit -> cash)", f"HTTP {r.status_code} {r.text[:200]}")
+        if r.status_code != 200:
+            return 1
+        edit_resp = r.json()
+        sale_after = edit_resp.get("sale") or {}
+        eh = sale_after.get("edit_history") or []
+        _assert(len(eh) == 2, "2e) edit_history length == 2", f"got={len(eh)}")
+
+        customer = get_customer(token, created["customer"])
+        _assert(
+            _approx_equal(customer["outstanding_balance"], base_cust["outstanding_balance"]),
+            "2e) outstanding_balance back to baseline",
+            f"got={customer['outstanding_balance']} baseline={base_cust['outstanding_balance']}",
+        )
+        _assert(
+            _approx_equal(customer["total_paid"], base_cust["total_paid"] + 500),
+            "2e) total_paid == baseline + 500",
+            f"got={customer['total_paid']} baseline+500={base_cust['total_paid'] + 500}",
+        )
+
+        # 2f. Insufficient stock rollback: PUT with quantity=999999
+        # Snapshot doc + customer + stock BEFORE this attempt
+        pre_stock = get_stock_qty(token, p1["id"], outlet_id)
+        pre_customer = get_customer(token, created["customer"])
+        # Get current sale doc to compare fields after the failed PUT
+        r = requests.get(f"{API}/sales/{sale_id}", headers=H, timeout=30)
+        _assert(r.status_code == 200, "2f) Snapshot sale doc before insufficient PUT", f"HTTP {r.status_code}")
+        pre_sale_doc = r.json() if r.status_code == 200 else {}
+
+        bad_body = dict(edit_body2)
+        bad_body["items"] = [{
+            "product_id": p1["id"],
+            "product_name": p1["name"],
+            "quantity": 999999,
+            "rate": 100,
+            "amount": 99999900,
+        }]
+        bad_body["subtotal"] = 99999900
+        bad_body["total_amount"] = 99999900
+        bad_body["cash_amount"] = 99999900
+        r = requests.put(
+            f"{API}/sales/{sale_id}",
+            headers=H,
+            params={"reason": "bad qty"},
+            json=bad_body,
+            timeout=30,
+        )
+        _assert(r.status_code == 400, "2f) PUT 999999 -> 400 Insufficient stock", f"HTTP {r.status_code} {r.text[:200]}")
+        body_lower = (r.text or "").lower()
+        _assert("insufficient stock" in body_lower, "2f) error message mentions Insufficient stock")
+
+        # Verify sale doc, customer, stock unchanged
+        r = requests.get(f"{API}/sales/{sale_id}", headers=H, timeout=30)
+        _assert(r.status_code == 200, "2f) GET sale doc after rollback", f"HTTP {r.status_code}")
+        post_sale_doc = r.json() if r.status_code == 200 else {}
+        _assert(
+            post_sale_doc.get("total_amount") == pre_sale_doc.get("total_amount")
+            and post_sale_doc.get("payment_mode") == pre_sale_doc.get("payment_mode")
+            and post_sale_doc.get("cash_amount") == pre_sale_doc.get("cash_amount")
+            and post_sale_doc.get("credit_amount") == pre_sale_doc.get("credit_amount")
+            and len(post_sale_doc.get("edit_history") or []) == len(pre_sale_doc.get("edit_history") or []),
+            "2f) sale doc unchanged after rollback",
+            f"pre.total={pre_sale_doc.get('total_amount')} post.total={post_sale_doc.get('total_amount')}; pre.eh={len(pre_sale_doc.get('edit_history') or [])} post.eh={len(post_sale_doc.get('edit_history') or [])}",
+        )
+        post_customer = get_customer(token, created["customer"])
+        _assert(
+            _approx_equal(post_customer["outstanding_balance"], pre_customer["outstanding_balance"])
+            and _approx_equal(post_customer["total_paid"], pre_customer["total_paid"])
+            and _approx_equal(post_customer["total_purchases"], pre_customer["total_purchases"])
+            and post_customer["transaction_count"] == pre_customer["transaction_count"],
+            "2f) customer ledger unchanged after rollback",
+            f"pre={pre_customer.get('outstanding_balance'),pre_customer.get('total_paid'),pre_customer.get('total_purchases'),pre_customer.get('transaction_count')} post={post_customer.get('outstanding_balance'),post_customer.get('total_paid'),post_customer.get('total_purchases'),post_customer.get('transaction_count')}",
+        )
+        post_stock = get_stock_qty(token, p1["id"], outlet_id)
+        _assert(_approx_equal(post_stock, pre_stock), "2f) stock unchanged after rollback", f"pre={pre_stock} post={post_stock}")
+
+        # 2g. Negative paths
+        bogus_id = f"nonexistent-{uuid.uuid4().hex}"
+        r = requests.put(
+            f"{API}/sales/{bogus_id}",
+            headers=H,
+            params={"reason": "test"},
+            json=edit_body2,
+            timeout=30,
+        )
+        _assert(r.status_code == 404, "2g) PUT non-existent sale -> 404", f"HTTP {r.status_code} {r.text[:200]}")
+
+        # Soft-delete current sale and try PUT -> expect 400 with deleted/cancelled
+        r = requests.delete(
+            f"{API}/sales/{sale_id}",
+            headers=H,
+            params={"reason": "negative path test"},
+            timeout=30,
+        )
+        _assert(r.status_code == 200, "2g) DELETE sale (soft) before negative test", f"HTTP {r.status_code} {r.text[:200]}")
+
+        r = requests.put(
+            f"{API}/sales/{sale_id}",
+            headers=H,
+            params={"reason": "edit deleted"},
+            json=edit_body2,
+            timeout=30,
+        )
+        _assert(r.status_code == 400, "2g) PUT deleted sale -> 400", f"HTTP {r.status_code} {r.text[:200]}")
+        msg = (r.text or "").lower()
+        _assert(
+            ("deleted" in msg) or ("cancelled" in msg) or ("canceled" in msg),
+            "2g) error mentions deleted/cancelled",
+            f"body={r.text[:200]}",
+        )
+
+        # =============== 3) PUT /api/vendor-procurement/{procurement_id} ===============
+        # Capture vendor baseline NOW (right before the procurement-edit flow) so deltas are clean
+        vendor = get_vendor(token, created["vendor"])
+        v_base = {
+            "outstanding_dues": float(vendor.get("outstanding_dues") or 0),
+            "total_purchases": float(vendor.get("total_purchases") or 0),
+            "total_paid": float(vendor.get("total_paid") or 0),
+            "transaction_count": int(vendor.get("transaction_count") or 0),
+        }
+        p1_stock_v_base = get_stock_qty(token, p1["id"], outlet_id)
+        p2_stock_v_base = get_stock_qty(token, p2["id"], outlet_id)
+
+        # 3a. POST bulk credit procurement: P1 qty=10 rate=50, P2 qty=5 rate=80, payment_mode=credit
+        bulk_body = {
+            "vendor_id": created["vendor"],
+            "outlet_id": outlet_id,
+            "items": [
+                {"product_id": p1["id"], "quantity": 10, "rate": 50},
+                {"product_id": p2["id"], "quantity": 5, "rate": 80},
+            ],
+            "payment_mode": "credit",
+            "cash_amount": 0,
+            "online_amount": 0,
+        }
+        r = requests.post(f"{API}/vendor-procurement/bulk", headers=H, json=bulk_body, timeout=30)
+        _assert(r.status_code == 200, "3a) POST /api/vendor-procurement/bulk (credit)", f"HTTP {r.status_code} {r.text[:200]}")
+        if r.status_code != 200:
+            return 1
+        proc_resp = r.json()
+        procurement_id = proc_resp.get("procurement_id") or proc_resp.get("id")
+        proc_total = float(proc_resp.get("total_amount") or (10 * 50 + 5 * 80))
+        _assert(bool(procurement_id), "3a) Capture procurement_id", f"got={procurement_id}")
+        _assert(_approx_equal(proc_total, 900), "3a) total_amount == 900", f"got={proc_total}")
+        created["procurement"] = procurement_id
+
+        # 3b. Verify stock and vendor ledger deltas vs baseline
+        p1_stock_after_a = get_stock_qty(token, p1["id"], outlet_id)
+        p2_stock_after_a = get_stock_qty(token, p2["id"], outlet_id)
+        _assert(_approx_equal(p1_stock_after_a, p1_stock_v_base + 10), "3b) P1 stock += 10",
+                f"got={p1_stock_after_a} expected={p1_stock_v_base + 10}")
+        _assert(_approx_equal(p2_stock_after_a, p2_stock_v_base + 5), "3b) P2 stock += 5",
+                f"got={p2_stock_after_a} expected={p2_stock_v_base + 5}")
+
+        vendor = get_vendor(token, created["vendor"])
+        _assert(_approx_equal(vendor["outstanding_dues"], v_base["outstanding_dues"] + proc_total),
+                "3b) vendor.outstanding_dues += total",
+                f"got={vendor['outstanding_dues']} expected={v_base['outstanding_dues'] + proc_total}")
+        _assert(_approx_equal(vendor["total_purchases"], v_base["total_purchases"] + proc_total),
+                "3b) vendor.total_purchases += total",
+                f"got={vendor['total_purchases']} expected={v_base['total_purchases'] + proc_total}")
+
+        # 3c. PUT to swap items: only P1 qty=2 rate=200, payment cash 400
+        swap_body = {
+            "vendor_id": created["vendor"],
+            "outlet_id": outlet_id,
+            "items": [
+                {"product_id": p1["id"], "quantity": 2, "rate": 200},
+            ],
+            "payment_mode": "cash",
+            "cash_amount": 400,
+            "online_amount": 0,
+        }
+        r = requests.put(
+            f"{API}/vendor-procurement/{procurement_id}",
+            headers=H,
+            params={"reason": "swap"},
+            json=swap_body,
+            timeout=30,
+        )
+        _assert(r.status_code == 200, "3c) PUT /api/vendor-procurement (swap)", f"HTTP {r.status_code} {r.text[:200]}")
+        if r.status_code != 200:
+            return 1
+        swap_resp = r.json()
+        _assert(swap_resp.get("items_count") == 1, "3c) items_count == 1", f"got={swap_resp.get('items_count')}")
+        _assert(swap_resp.get("payment_status") == "paid", "3c) payment_status == 'paid'", f"got={swap_resp.get('payment_status')}")
+        _assert(_approx_equal(swap_resp.get("credit_amount") or 0, 0), "3c) credit_amount == 0", f"got={swap_resp.get('credit_amount')}")
+        _assert(_approx_equal(swap_resp.get("total_amount") or 0, 400), "3c) total_amount == 400", f"got={swap_resp.get('total_amount')}")
+
+        # 3d. Verify net stock effect vs baseline
+        p1_stock_after_c = get_stock_qty(token, p1["id"], outlet_id)
+        p2_stock_after_c = get_stock_qty(token, p2["id"], outlet_id)
+        _assert(_approx_equal(p1_stock_after_c, p1_stock_v_base + 2),
+                "3d) P1 net stock vs baseline = +2",
+                f"got={p1_stock_after_c} expected={p1_stock_v_base + 2}")
+        _assert(_approx_equal(p2_stock_after_c, p2_stock_v_base),
+                "3d) P2 net stock vs baseline = 0",
+                f"got={p2_stock_after_c} expected={p2_stock_v_base}")
+
+        # 3e. Vendor ledger: outstanding_dues == baseline; total_purchases delta = +400; transaction_count delta = +1
+        vendor = get_vendor(token, created["vendor"])
+        _assert(_approx_equal(vendor["outstanding_dues"], v_base["outstanding_dues"]),
+                "3e) vendor.outstanding_dues back to baseline",
+                f"got={vendor['outstanding_dues']} baseline={v_base['outstanding_dues']}")
+        _assert(_approx_equal(vendor["total_purchases"], v_base["total_purchases"] + 400),
+                "3e) vendor.total_purchases delta = +400",
+                f"got={vendor['total_purchases']} baseline+400={v_base['total_purchases'] + 400}")
+        _assert(int(vendor.get("transaction_count") or 0) == v_base["transaction_count"] + 1,
+                "3e) vendor.transaction_count delta = +1",
+                f"got={vendor.get('transaction_count')} baseline+1={v_base['transaction_count'] + 1}")
+
+        # 3f. edit_history length == 1, is_edited == true, items_count == 1 (fetch doc)
+        r = requests.get(f"{API}/vendor-procurement/{procurement_id}", headers=H, timeout=30)
+        _assert(r.status_code == 200, "3f) GET procurement doc", f"HTTP {r.status_code}")
+        proc_doc = r.json() if r.status_code == 200 else {}
+        _assert(proc_doc.get("is_edited") is True, "3f) procurement.is_edited == true",
+                f"got={proc_doc.get('is_edited')}")
+        eh = proc_doc.get("edit_history") or []
+        _assert(len(eh) == 1, "3f) procurement.edit_history length == 1", f"got={len(eh)}")
+        _assert(int(proc_doc.get("items_count") or 0) == 1, "3f) procurement.items_count == 1",
+                f"got={proc_doc.get('items_count')}")
+
+        # 3g. Edge: items=[]
+        bad_swap = dict(swap_body)
+        bad_swap["items"] = []
+        r = requests.put(
+            f"{API}/vendor-procurement/{procurement_id}",
+            headers=H,
+            params={"reason": "empty"},
+            json=bad_swap,
+            timeout=30,
+        )
+        _assert(r.status_code == 400, "3g) PUT empty items -> 400", f"HTTP {r.status_code} {r.text[:200]}")
+
+        bogus = f"nonexistent-{uuid.uuid4().hex}"
+        r = requests.put(
+            f"{API}/vendor-procurement/{bogus}",
+            headers=H,
+            params={"reason": "x"},
+            json=swap_body,
+            timeout=30,
+        )
+        _assert(r.status_code == 404, "3g) PUT non-existent procurement -> 404", f"HTTP {r.status_code} {r.text[:200]}")
+
+        # =============== 4) Cleanup ===============
+        # Delete TEST procurement (current)
+        if created.get("procurement"):
+            r = requests.delete(
+                f"{API}/vendor-procurement/{created['procurement']}",
+                headers=H,
+                params={"reason": "test cleanup"},
+                timeout=30,
+            )
+            _record("Cleanup: DELETE TEST procurement (post-edit)", r.status_code in (200, 400),
+                    f"HTTP {r.status_code} {r.text[:120]}")
+
+        # Delete the seed procurement too
+        if seed_proc_id:
+            r = requests.delete(
+                f"{API}/vendor-procurement/{seed_proc_id}",
+                headers=H,
+                params={"reason": "test cleanup"},
+                timeout=30,
+            )
+            _record("Cleanup: DELETE seed procurement", r.status_code in (200, 400),
+                    f"HTTP {r.status_code} {r.text[:120]}")
+
+        # Sale was already soft-deleted in 2g; idempotent re-delete OK if needed
+        # Vendor + customer + products soft-delete
+        if created.get("vendor"):
+            r = requests.delete(f"{API}/vendors/{created['vendor']}", headers=H, timeout=30)
+            _record("Cleanup: DELETE vendor", r.status_code == 200, f"HTTP {r.status_code} {r.text[:100]}")
+        # Customer DELETE endpoint may or may not exist; try, don't fail if missing
+        if created.get("customer"):
+            r = requests.delete(f"{API}/customers/{created['customer']}", headers=H, timeout=30)
+            _record("Cleanup: DELETE customer (best-effort)", r.status_code in (200, 404, 405),
+                    f"HTTP {r.status_code} {r.text[:100]}")
+        for pr in created["products"]:
+            r = requests.delete(f"{API}/products/{pr['id']}", headers=H, timeout=30)
+            _record(f"Cleanup: DELETE product {pr['name']}", r.status_code == 200,
+                    f"HTTP {r.status_code} {r.text[:100]}")
+
+    finally:
+        passed = sum(1 for x in results if x["ok"])
+        total = len(results)
+        print(f"\n========== SUMMARY {passed}/{total} passed ==========")
+        if failures:
+            print("Failed cases:")
+            for f in failures:
+                print("  " + f)
+
+    return 0 if not failures else 2
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        print(f"FATAL EXCEPTION: {e}")
-        import traceback
-        traceback.print_exc()
-        _summary()
-        sys.exit(1)
-    sys.exit(0 if not FAIL_LIST else 1)
+    sys.exit(main())

@@ -2151,6 +2151,381 @@ async def delete_sale(
         "reversal_details": reversal_details
     }
 
+
+# ===================== Models for Bulk Procurement (used by edit_vendor_procurement and bulk POST below) =====================
+
+class BulkProcurementItem(BaseModel):
+    product_id: str  # 'manual' allowed
+    quantity: float
+    rate: float
+    variety_id: Optional[str] = None
+    variety_name: Optional[str] = None
+    manual_product_name: Optional[str] = None
+    manual_product_unit: Optional[str] = None
+
+
+class BulkProcurementCreate(BaseModel):
+    vendor_id: str  # 'manual' allowed
+    outlet_id: str
+    items: List[BulkProcurementItem]
+    payment_mode: str = "cash"  # cash | online | credit | partial
+    cash_amount: float = 0
+    online_amount: float = 0
+    notes: Optional[str] = None
+    manual_vendor_name: Optional[str] = None
+    manual_vendor_mobile: Optional[str] = None
+
+
+@api_router.put("/sales/{sale_id}")
+async def edit_sale(
+    sale_id: str,
+    new_payload: SaleCreate,
+    reason: Optional[str] = None,
+    current_user: dict = Depends(require_admin),
+):
+    """
+    Edit a sales transaction with full reversal + reapply.
+    - Admin only, 30-day limit (same as delete).
+    - Reverses old stock + customer ledger.
+    - Validates new stock availability.
+    - Applies new stock + customer ledger.
+    - Updates the sale doc in place keeping id and bill_number.
+    - Appends edit_history entry with old snapshot.
+    """
+    old_sale = await db.sales.find_one({"id": sale_id})
+    if not old_sale:
+        raise HTTPException(status_code=404, detail="Sale not found")
+    if old_sale.get("is_deleted", False):
+        raise HTTPException(status_code=400, detail="Cannot edit a deleted/cancelled transaction")
+
+    sale_date = old_sale.get("created_at")
+    if isinstance(sale_date, str):
+        sale_date = datetime.fromisoformat(sale_date)
+    if (datetime.utcnow() - sale_date).days > 30:
+        raise HTTPException(status_code=400, detail="Cannot edit transaction older than 30 days")
+
+    # ---- 1. Reverse OLD stock ----
+    old_outlet_id = old_sale.get("outlet_id")
+    for item in (old_sale.get("items") or []):
+        pid = item.get("product_id")
+        qty = item.get("quantity", 0) or 0
+        if pid and qty > 0 and old_outlet_id:
+            await db.stock.update_one(
+                {"product_id": pid, "outlet_id": old_outlet_id},
+                {"$inc": {"quantity": qty, "stock_sold": -qty}, "$set": {"updated_at": datetime.utcnow()}},
+            )
+
+    # ---- 2. Reverse OLD customer ledger ----
+    old_customer_id = old_sale.get("customer_id")
+    old_total = old_sale.get("total_amount", 0)
+    old_credit = old_sale.get("credit_amount", 0)
+    old_paid = (old_sale.get("cash_amount", 0) or 0) + (old_sale.get("online_amount", 0) or 0)
+    if old_customer_id:
+        update_ops = {
+            "$inc": {
+                "total_purchases": -old_total,
+                "transaction_count": -1,
+            },
+            "$set": {"updated_at": datetime.utcnow()},
+        }
+        if old_credit > 0:
+            update_ops["$inc"]["total_credit"] = -old_credit
+            update_ops["$inc"]["outstanding_balance"] = -old_credit
+        if old_paid > 0:
+            update_ops["$inc"]["total_paid"] = -old_paid
+        await db.customers.update_one({"id": old_customer_id}, update_ops)
+
+    # ---- 3. Validate NEW stock at NEW outlet (after reversal) ----
+    for item in new_payload.items:
+        stock = await db.stock.find_one({"product_id": item.product_id, "outlet_id": new_payload.outlet_id})
+        if not stock or stock["quantity"] < item.quantity:
+            # Roll back the reversal we just did to avoid corrupting state
+            for rb in (old_sale.get("items") or []):
+                pid = rb.get("product_id")
+                qty = rb.get("quantity", 0) or 0
+                if pid and qty > 0 and old_outlet_id:
+                    await db.stock.update_one(
+                        {"product_id": pid, "outlet_id": old_outlet_id},
+                        {"$inc": {"quantity": -qty, "stock_sold": qty}, "$set": {"updated_at": datetime.utcnow()}},
+                    )
+            if old_customer_id:
+                rb_ops = {
+                    "$inc": {"total_purchases": old_total, "transaction_count": 1},
+                    "$set": {"updated_at": datetime.utcnow()},
+                }
+                if old_credit > 0:
+                    rb_ops["$inc"]["total_credit"] = old_credit
+                    rb_ops["$inc"]["outstanding_balance"] = old_credit
+                if old_paid > 0:
+                    rb_ops["$inc"]["total_paid"] = old_paid
+                await db.customers.update_one({"id": old_customer_id}, rb_ops)
+            raise HTTPException(status_code=400, detail=f"Insufficient stock for {item.product_name}")
+
+    # ---- 4. Apply NEW stock deduction ----
+    for item in new_payload.items:
+        await db.stock.update_one(
+            {"product_id": item.product_id, "outlet_id": new_payload.outlet_id},
+            {"$inc": {"quantity": -item.quantity, "stock_sold": item.quantity}, "$set": {"updated_at": datetime.utcnow()}},
+        )
+
+    # ---- 5. Apply NEW customer ledger ----
+    new_customer_id = new_payload.customer_id
+    new_total = new_payload.total_amount
+    new_credit = new_payload.credit_amount or 0
+    new_paid = (new_payload.cash_amount or 0) + (new_payload.online_amount or 0)
+    if new_customer_id:
+        if new_credit > 0:
+            await db.customers.update_one(
+                {"id": new_customer_id},
+                {
+                    "$inc": {
+                        "total_purchases": new_total,
+                        "total_credit": new_credit,
+                        "total_paid": new_paid,
+                        "outstanding_balance": new_credit,
+                        "transaction_count": 1,
+                    },
+                    "$set": {"updated_at": datetime.utcnow(), "last_transaction_date": datetime.utcnow()},
+                },
+            )
+        else:
+            await db.customers.update_one(
+                {"id": new_customer_id},
+                {
+                    "$inc": {
+                        "total_purchases": new_total,
+                        "total_paid": new_total,
+                        "transaction_count": 1,
+                    },
+                    "$set": {"updated_at": datetime.utcnow(), "last_transaction_date": datetime.utcnow()},
+                },
+            )
+
+    # ---- 6. Update doc in place ----
+    old_snapshot = {k: v for k, v in old_sale.items() if k != "_id"}
+    update_doc = new_payload.dict()
+    # Preserve identity & history
+    update_doc.pop("id", None)
+    update_doc["is_edited"] = True
+    update_doc["last_edited_at"] = datetime.utcnow()
+    update_doc["last_edited_by"] = current_user["id"]
+    update_doc["last_edit_reason"] = reason
+
+    await db.sales.update_one(
+        {"id": sale_id},
+        {
+            "$set": update_doc,
+            "$push": {"edit_history": {"snapshot": old_snapshot, "edited_at": datetime.utcnow(), "edited_by": current_user["id"], "reason": reason}},
+        },
+    )
+
+    updated = await db.sales.find_one({"id": sale_id})
+    if updated:
+        updated.pop("_id", None)
+    return {"message": "Sale edited successfully", "sale_id": sale_id, "sale": updated}
+
+
+@api_router.put("/vendor-procurement/{procurement_id}")
+async def edit_vendor_procurement(
+    procurement_id: str,
+    new_payload: BulkProcurementCreate,
+    reason: Optional[str] = None,
+    current_user: dict = Depends(require_admin),
+):
+    """
+    Edit a vendor procurement with full reversal + reapply.
+    Accepts the bulk schema (multi-item). Single-item legacy docs become multi-item after edit.
+    Admin only, 30-day limit.
+    """
+    old_proc = await db.vendor_procurement.find_one({"id": procurement_id})
+    if not old_proc:
+        raise HTTPException(status_code=404, detail="Procurement not found")
+    if old_proc.get("is_deleted", False):
+        raise HTTPException(status_code=400, detail="Cannot edit a deleted/cancelled transaction")
+
+    proc_date = old_proc.get("created_at")
+    if isinstance(proc_date, str):
+        proc_date = datetime.fromisoformat(proc_date)
+    if (datetime.utcnow() - proc_date).days > 30:
+        raise HTTPException(status_code=400, detail="Cannot edit transaction older than 30 days")
+
+    if not new_payload.items or len(new_payload.items) == 0:
+        raise HTTPException(status_code=400, detail="At least one item is required")
+
+    # ---- Resolve new vendor + outlet ----
+    vendor_doc = None
+    vendor_name = new_payload.manual_vendor_name
+    if new_payload.vendor_id != "manual":
+        vendor_doc = await db.vendors.find_one({"id": new_payload.vendor_id, "is_active": True})
+        if not vendor_doc:
+            raise HTTPException(status_code=404, detail="Vendor not found")
+        vendor_name = vendor_doc["name"]
+    elif not new_payload.manual_vendor_name:
+        raise HTTPException(status_code=400, detail="Manual vendor name required")
+
+    outlet = await db.outlets.find_one({"id": new_payload.outlet_id, "is_active": True})
+    if not outlet:
+        raise HTTPException(status_code=404, detail="Outlet not found")
+
+    # ---- 1. Reverse OLD stock ----
+    old_outlet_id = old_proc.get("outlet_id")
+    old_items = old_proc.get("items") or []
+    if not old_items:
+        # Legacy single-item: synthesize an items[] for reversal logic
+        old_items = [{
+            "product_id": old_proc.get("product_id"),
+            "quantity": old_proc.get("quantity", 0),
+        }]
+    for it in old_items:
+        pid = it.get("product_id")
+        qty = it.get("quantity", 0) or 0
+        if pid and pid != "manual" and qty > 0 and old_outlet_id:
+            stock = await db.stock.find_one({"outlet_id": old_outlet_id, "product_id": pid})
+            if stock:
+                new_qty = max(0, (stock.get("quantity") or 0) - qty)
+                new_received = max(0, (stock.get("stock_received") or 0) - qty)
+                await db.stock.update_one(
+                    {"id": stock["id"]},
+                    {"$set": {"quantity": new_qty, "stock_received": new_received, "updated_at": datetime.utcnow()}},
+                )
+
+    # ---- 2. Reverse OLD vendor ledger ----
+    old_vendor_id = old_proc.get("vendor_id")
+    old_total = old_proc.get("total_amount", 0)
+    old_credit = old_proc.get("credit_amount", 0)
+    old_paid = (old_proc.get("cash_amount", 0) or 0) + (old_proc.get("online_amount", 0) or 0)
+    if old_vendor_id and old_vendor_id != "manual":
+        update_ops = {
+            "$inc": {"total_purchases": -old_total, "transaction_count": -1},
+            "$set": {"updated_at": datetime.utcnow()},
+        }
+        if old_credit > 0:
+            update_ops["$inc"]["outstanding_dues"] = -old_credit
+        if old_paid > 0:
+            update_ops["$inc"]["total_paid"] = -old_paid
+        await db.vendors.update_one({"id": old_vendor_id}, update_ops)
+
+    # ---- 3. Resolve NEW items + compute total ----
+    resolved_items: List[dict] = []
+    grand_total = 0.0
+    for raw in new_payload.items:
+        if raw.quantity is None or raw.quantity <= 0:
+            raise HTTPException(status_code=400, detail="Item quantity must be positive")
+        if raw.rate is None or raw.rate < 0:
+            raise HTTPException(status_code=400, detail="Item rate must be non-negative")
+        product_name = raw.manual_product_name
+        product_unit = raw.manual_product_unit or "kg"
+        if raw.product_id != "manual":
+            product = await db.products.find_one({"id": raw.product_id, "is_active": True})
+            if not product:
+                raise HTTPException(status_code=404, detail=f"Product {raw.product_id} not found")
+            product_name = product["name"]
+            product_unit = product.get("unit", "kg")
+        elif not raw.manual_product_name:
+            raise HTTPException(status_code=400, detail="Manual product name required for manual items")
+        amt = float(raw.quantity) * float(raw.rate)
+        grand_total += amt
+        resolved_items.append({
+            "product_id": raw.product_id,
+            "product_name": product_name,
+            "product_unit": product_unit,
+            "variety_id": raw.variety_id,
+            "variety_name": raw.variety_name,
+            "quantity": float(raw.quantity),
+            "rate": float(raw.rate),
+            "amount": amt,
+            "manual_product_name": raw.manual_product_name,
+            "manual_product_unit": raw.manual_product_unit,
+        })
+
+    paid_amount = float(new_payload.cash_amount or 0) + float(new_payload.online_amount or 0)
+    credit_amount = max(0.0, grand_total - paid_amount)
+    payment_status = "paid" if credit_amount <= 0 else "credit"
+
+    # ---- 4. Apply NEW stock ----
+    for it in resolved_items:
+        if it["product_id"] == "manual":
+            continue
+        existing = await db.stock.find_one({"product_id": it["product_id"], "outlet_id": new_payload.outlet_id})
+        if existing:
+            await db.stock.update_one(
+                {"id": existing["id"]},
+                {"$inc": {"quantity": it["quantity"], "stock_received": it["quantity"]}, "$set": {"updated_at": datetime.utcnow()}},
+            )
+        else:
+            new_stock = Stock(product_id=it["product_id"], outlet_id=new_payload.outlet_id, quantity=it["quantity"], stock_received=it["quantity"])
+            await db.stock.insert_one(new_stock.dict())
+
+    # ---- 5. Apply NEW vendor ledger ----
+    if new_payload.vendor_id != "manual":
+        await db.vendors.update_one(
+            {"id": new_payload.vendor_id},
+            {
+                "$inc": {
+                    "total_purchases": grand_total,
+                    "total_paid": paid_amount,
+                    "outstanding_dues": credit_amount,
+                    "transaction_count": 1,
+                },
+                "$set": {"updated_at": datetime.utcnow(), "last_transaction_date": datetime.utcnow()},
+            },
+        )
+
+    # ---- 6. Update doc in place ----
+    old_snapshot = {k: v for k, v in old_proc.items() if k != "_id"}
+    update_doc = {
+        "vendor_id": new_payload.vendor_id,
+        "vendor_name": vendor_name,
+        "manual_vendor_name": new_payload.manual_vendor_name,
+        "manual_vendor_mobile": new_payload.manual_vendor_mobile,
+        "outlet_id": new_payload.outlet_id,
+        "outlet_name": outlet["name"],
+        "items": resolved_items,
+        "product_id": resolved_items[0]["product_id"],
+        "product_name": (
+            f"{resolved_items[0]['product_name']}"
+            + (f" + {len(resolved_items) - 1} more" if len(resolved_items) > 1 else "")
+        ),
+        "variety_id": resolved_items[0].get("variety_id"),
+        "variety_name": resolved_items[0].get("variety_name"),
+        "quantity": sum(it["quantity"] for it in resolved_items),
+        "rate": resolved_items[0]["rate"],
+        "total_amount": grand_total,
+        "payment_mode": new_payload.payment_mode,
+        "cash_amount": float(new_payload.cash_amount or 0),
+        "online_amount": float(new_payload.online_amount or 0),
+        "credit_amount": credit_amount,
+        "payment_status": payment_status,
+        "notes": new_payload.notes,
+        "is_multi_item": True,
+        "items_count": len(resolved_items),
+        "is_edited": True,
+        "last_edited_at": datetime.utcnow(),
+        "last_edited_by": current_user["id"],
+        "last_edit_reason": reason,
+    }
+
+    await db.vendor_procurement.update_one(
+        {"id": procurement_id},
+        {
+            "$set": update_doc,
+            "$push": {"edit_history": {"snapshot": old_snapshot, "edited_at": datetime.utcnow(), "edited_by": current_user["id"], "reason": reason}},
+        },
+    )
+
+    updated = await db.vendor_procurement.find_one({"id": procurement_id})
+    if updated:
+        updated.pop("_id", None)
+    return {
+        "message": "Procurement edited successfully",
+        "procurement_id": procurement_id,
+        "items_count": len(resolved_items),
+        "total_amount": grand_total,
+        "credit_amount": credit_amount,
+        "payment_status": payment_status,
+    }
+
+
 @api_router.get("/deleted-transactions")
 async def get_deleted_transactions(
     transaction_type: Optional[str] = None,
@@ -3677,28 +4052,6 @@ async def reject_shareholder_upgrade(request_id: str, remark: str = "Request rej
     return {"message": "Shareholder upgrade rejected"}
 
 # ===================== VENDOR PROCUREMENT =====================
-
-class BulkProcurementItem(BaseModel):
-    product_id: str  # 'manual' allowed
-    quantity: float
-    rate: float
-    variety_id: Optional[str] = None
-    variety_name: Optional[str] = None
-    manual_product_name: Optional[str] = None
-    manual_product_unit: Optional[str] = None
-
-
-class BulkProcurementCreate(BaseModel):
-    vendor_id: str  # 'manual' allowed
-    outlet_id: str
-    items: List[BulkProcurementItem]
-    payment_mode: str = "cash"  # cash | online | credit | partial
-    cash_amount: float = 0
-    online_amount: float = 0
-    notes: Optional[str] = None
-    manual_vendor_name: Optional[str] = None
-    manual_vendor_mobile: Optional[str] = None
-
 
 @api_router.post("/vendor-procurement/bulk")
 async def create_bulk_vendor_procurement(
