@@ -42,8 +42,6 @@
     "experiments": {
       "typedRoutes": true
     },
-    "extra": {
-      "expoHostname": "https://transaction-mgmt-dev.preview.emergentagent.com"
-    }
+    "extra": {}
   }
 }
