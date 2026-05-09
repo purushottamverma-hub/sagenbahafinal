@@ -1,311 +1,441 @@
+#!/usr/bin/env python3
 """
-Focused backend test for the review request:
-Cancelled Purchases in Vendor Ledger (Phase 3) — verify the new
-DELETE /api/vendor-procurement/{id}?reason=... endpoint and its effects
-on stock, vendor.outstanding_dues, and vendor ledger transactions/summary.
+Backend tests for Reports CSV endpoints:
+  - GET /api/reports/transactions
+  - GET /api/reports/raw
+
+Plus a quick regression check for /api/customers/search and /api/vendor-procurement.
+
+Read-only verification preferred. No live data is mutated.
 """
+
+import csv
+import io
 import os
+import sys
 import uuid
-import json
+
 import requests
 
 BASE_URL = os.environ.get(
-    "BACKEND_URL",
+    "EXPO_PUBLIC_BACKEND_URL",
     "https://transaction-mgmt-dev.preview.emergentagent.com",
 ).rstrip("/")
 API = f"{BASE_URL}/api"
 
-ADMIN = {"username": "admin", "password": "admin123"}
-TAG = f"TEST_{uuid.uuid4().hex[:8]}"
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "admin123"
+
+results = []
 
 
-def _ok(label, cond, extra=""):
-    print(f"{'PASS' if cond else 'FAIL'} | {label}{(' — ' + extra) if extra else ''}")
-    return cond
+def record(name, ok, detail=""):
+    status = "PASS" if ok else "FAIL"
+    print(f"[{status}] {name} :: {detail}")
+    results.append((name, ok, detail))
 
 
-def login_admin():
-    r = requests.post(f"{API}/auth/login", json=ADMIN, timeout=30)
+def admin_login():
+    r = requests.post(
+        f"{API}/auth/login",
+        json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD},
+        timeout=30,
+    )
     assert r.status_code == 200, f"Admin login failed: {r.status_code} {r.text}"
-    token = r.json().get("access_token") or r.json().get("token")
-    assert token, f"No token in response: {r.text}"
+    token = r.json()["access_token"]
+    return token
+
+
+def register_farmer_and_login():
+    """Register a temp farmer (auto-active, gets token). Used for non-admin 403 test."""
+    suffix = uuid.uuid4().hex[:8]
+    username = f"farmer_test_{suffix}"
+    password = "farmer_test_pass_123"
+    r = requests.post(
+        f"{API}/auth/register",
+        json={
+            "username": username,
+            "password": password,
+            "full_name": f"TEST_{suffix} Ramesh",
+            "role": "farmer",
+            "mobile": "9000000000",
+            "village": "TestVillage",
+        },
+        timeout=30,
+    )
+    if r.status_code != 200:
+        print(f"  (Could not register farmer: {r.status_code} {r.text})")
+        return None
+    body = r.json()
+    return body.get("access_token")
+
+
+def hdr(token):
     return {"Authorization": f"Bearer {token}"}
 
 
-def ensure_product(headers):
-    r = requests.get(f"{API}/products", headers=headers, timeout=30)
-    r.raise_for_status()
-    products = r.json()
-    active = [p for p in products if p.get("is_active", True)]
-    assert active, "No active product exists for testing"
-    return active[0]
+def parse_csv_text(text):
+    reader = csv.reader(io.StringIO(text))
+    return list(reader)
 
 
-def ensure_outlet(headers):
-    r = requests.get(f"{API}/outlets", headers=headers, timeout=30)
-    r.raise_for_status()
-    outlets = r.json()
-    active = [o for o in outlets if o.get("is_active", True)]
-    assert active, "No active outlet exists"
-    return active[0]
+# ============================================================
+# /api/reports/transactions
+# ============================================================
+
+def test_transactions_json_all(admin_token):
+    r = requests.get(
+        f"{API}/reports/transactions",
+        params={"format": "json", "type": "all"},
+        headers=hdr(admin_token), timeout=60,
+    )
+    ok = r.status_code == 200
+    detail = f"HTTP {r.status_code}"
+    if ok:
+        body = r.json()
+        if not isinstance(body, dict) or "count" not in body or "rows" not in body:
+            ok = False
+            detail += " - missing count/rows keys"
+        else:
+            expected_keys = {"date", "time", "type", "reference", "person_name", "outlet",
+                             "product", "variety", "quantity", "rate", "amount", "total",
+                             "payment_mode", "is_cancelled"}
+            if body["rows"]:
+                row_keys = set(body["rows"][0].keys())
+                missing = expected_keys - row_keys
+                if missing:
+                    ok = False
+                    detail += f" - missing row keys: {missing}"
+                else:
+                    detail += f" - count={body['count']}, sample type={body['rows'][0].get('type')}"
+            else:
+                detail += f" - count={body['count']} (empty)"
+    record("1a) /reports/transactions format=json type=all", ok, detail)
+    return ok
 
 
-def create_test_vendor(headers):
-    payload = {
-        "name": f"Shree Traders {TAG}",
-        "mobile": "9988776655",
-        "address": "Main Market, Bharatpur",
-        "village": "Bharatpur",
-    }
-    r = requests.post(f"{API}/vendors", headers=headers, json=payload, timeout=30)
-    assert r.status_code == 200, f"Vendor create failed: {r.status_code} {r.text}"
-    return r.json()
+def test_transactions_csv_all(admin_token):
+    r = requests.get(
+        f"{API}/reports/transactions",
+        params={"format": "csv", "type": "all"},
+        headers=hdr(admin_token), timeout=60,
+    )
+    ok = r.status_code == 200
+    detail = f"HTTP {r.status_code}"
+    if ok:
+        ct = r.headers.get("Content-Type", "")
+        cd = r.headers.get("Content-Disposition", "")
+        if not ct.lower().startswith("text/csv"):
+            ok = False
+            detail += f" - wrong Content-Type: {ct}"
+        elif "attachment" not in cd or "filename" not in cd:
+            ok = False
+            detail += f" - missing Content-Disposition: {cd}"
+        else:
+            rows = parse_csv_text(r.text)
+            header = rows[0] if rows else []
+            expected = ["date", "time", "type", "reference", "person_name", "outlet",
+                        "product", "variety", "quantity", "rate", "amount", "total",
+                        "payment_mode", "is_cancelled"]
+            if header != expected:
+                ok = False
+                detail += f" - header mismatch: got {header}"
+            else:
+                detail += f" - CT={ct.split(';')[0]}, data_rows={len(rows)-1}"
+    record("1b) /reports/transactions format=csv type=all", ok, detail)
+    return ok
 
 
-def get_vendor(headers, vendor_id):
-    r = requests.get(f"{API}/vendors", headers=headers, timeout=30)
-    r.raise_for_status()
-    for v in r.json():
-        if v.get("id") == vendor_id:
-            return v
-    return None
+def test_transactions_csv_sale_only(admin_token):
+    r = requests.get(
+        f"{API}/reports/transactions",
+        params={"format": "csv", "type": "sale",
+                "start_date": "2020-01-01", "end_date": "2030-12-31"},
+        headers=hdr(admin_token), timeout=60,
+    )
+    ok = r.status_code == 200
+    detail = f"HTTP {r.status_code}"
+    if ok:
+        rows = parse_csv_text(r.text)
+        header = rows[0] if rows else []
+        type_idx = header.index("type") if "type" in header else -1
+        if type_idx < 0:
+            ok = False
+            detail += " - no 'type' column"
+        else:
+            non_sale = [row for row in rows[1:] if row and row[type_idx] != "Sale"]
+            if non_sale:
+                ok = False
+                detail += f" - {len(non_sale)} non-Sale rows; sample={non_sale[0][:5]}"
+            else:
+                detail += f" - {len(rows)-1} rows, all type=Sale"
+    record("1c) /reports/transactions type=sale (wide range) - all 'Sale'", ok, detail)
+    return ok
 
 
-def get_stock_qty(headers, outlet_id, product_id):
-    r = requests.get(f"{API}/stock", headers=headers, timeout=30)
-    r.raise_for_status()
-    for s in r.json():
-        if s.get("outlet_id") == outlet_id and s.get("product_id") == product_id:
-            return s.get("quantity", 0)
-    return 0
+def test_transactions_csv_purchase_only(admin_token):
+    r = requests.get(
+        f"{API}/reports/transactions",
+        params={"format": "csv", "type": "purchase",
+                "start_date": "2020-01-01", "end_date": "2030-12-31"},
+        headers=hdr(admin_token), timeout=60,
+    )
+    ok = r.status_code == 200
+    detail = f"HTTP {r.status_code}"
+    if ok:
+        rows = parse_csv_text(r.text)
+        header = rows[0] if rows else []
+        type_idx = header.index("type") if "type" in header else -1
+        if type_idx < 0:
+            ok = False
+            detail += " - no 'type' column"
+        else:
+            non_purchase = [row for row in rows[1:] if row and row[type_idx] != "Purchase"]
+            if non_purchase:
+                ok = False
+                detail += f" - {len(non_purchase)} non-Purchase rows; sample={non_purchase[0][:5]}"
+            else:
+                detail += f" - {len(rows)-1} rows, all type=Purchase"
+    record("1d) /reports/transactions type=purchase - all 'Purchase'", ok, detail)
+    return ok
 
+
+def test_transactions_include_deleted(admin_token):
+    r1 = requests.get(
+        f"{API}/reports/transactions",
+        params={"format": "json", "type": "all",
+                "start_date": "2020-01-01", "end_date": "2030-12-31",
+                "include_deleted": "false"},
+        headers=hdr(admin_token), timeout=60,
+    )
+    r2 = requests.get(
+        f"{API}/reports/transactions",
+        params={"format": "json", "type": "all",
+                "start_date": "2020-01-01", "end_date": "2030-12-31",
+                "include_deleted": "true"},
+        headers=hdr(admin_token), timeout=60,
+    )
+    ok = r1.status_code == 200 and r2.status_code == 200
+    detail = f"HTTP {r1.status_code}/{r2.status_code}"
+    if ok:
+        c1 = r1.json().get("count", 0)
+        c2 = r2.json().get("count", 0)
+        cancelled_in_default = [row for row in r1.json().get("rows", []) if row.get("is_cancelled")]
+        cancelled_in_with = [row for row in r2.json().get("rows", []) if row.get("is_cancelled")]
+        if c2 < c1:
+            ok = False
+            detail += f" - include_deleted=true count {c2} < default {c1}"
+        elif cancelled_in_default:
+            ok = False
+            detail += f" - default leaked {len(cancelled_in_default)} cancelled rows"
+        else:
+            detail += f" - default={c1}, with_deleted={c2}, cancelled_only_with_deleted={len(cancelled_in_with)}"
+    record("1e) /reports/transactions include_deleted toggle", ok, detail)
+    return ok
+
+
+def test_transactions_date_filter_narrows(admin_token):
+    r = requests.get(
+        f"{API}/reports/transactions",
+        params={"format": "csv", "type": "all",
+                "start_date": "1990-01-01", "end_date": "1990-12-31"},
+        headers=hdr(admin_token), timeout=60,
+    )
+    ok = r.status_code == 200
+    detail = f"HTTP {r.status_code}"
+    if ok:
+        rows = parse_csv_text(r.text)
+        non_header_rows = [row for row in rows[1:] if row]
+        if len(non_header_rows) != 0:
+            ok = False
+            detail += f" - expected 0 data rows, got {len(non_header_rows)}"
+        else:
+            detail += " - 0 data rows beyond header"
+    record("1f) /reports/transactions date filter (1990) → 0 rows", ok, detail)
+    return ok
+
+
+# ============================================================
+# /api/reports/raw
+# ============================================================
+
+def test_raw_sales_csv(admin_token):
+    r = requests.get(
+        f"{API}/reports/raw",
+        params={"type": "sale", "format": "csv"},
+        headers=hdr(admin_token), timeout=90,
+    )
+    ok = r.status_code == 200
+    detail = f"HTTP {r.status_code}"
+    if ok:
+        ct = r.headers.get("Content-Type", "")
+        if not ct.lower().startswith("text/csv"):
+            ok = False
+            detail += f" - wrong Content-Type: {ct}"
+        else:
+            rows = parse_csv_text(r.text)
+            if len(rows) < 1:
+                ok = False
+                detail += " - no header"
+            else:
+                header = set(rows[0])
+                must_have_any = {"id", "bill_number", "items"}
+                hits = must_have_any & header
+                if not hits:
+                    ok = False
+                    detail += f" - header missing sales keys; cols sample={sorted(header)[:10]}"
+                else:
+                    detail += f" - data_rows={len(rows)-1}, header_cols={len(header)}, has {sorted(hits)}"
+    record("2a) /reports/raw type=sale&format=csv (admin)", ok, detail)
+    return ok
+
+
+def test_raw_purchase_csv(admin_token):
+    r = requests.get(
+        f"{API}/reports/raw",
+        params={"type": "purchase", "format": "csv"},
+        headers=hdr(admin_token), timeout=90,
+    )
+    ok = r.status_code == 200
+    detail = f"HTTP {r.status_code}"
+    if ok:
+        rows = parse_csv_text(r.text)
+        if len(rows) < 1:
+            ok = False
+            detail += " - no header"
+        else:
+            header = set(rows[0])
+            must_have_any = {"id", "receipt_number", "vendor_id"}
+            hits = must_have_any & header
+            if not hits:
+                ok = False
+                detail += f" - header missing procurement keys; cols sample={sorted(header)[:10]}"
+            else:
+                detail += f" - data_rows={len(rows)-1}, header_cols={len(header)}, has {sorted(hits)}"
+    record("2b) /reports/raw type=purchase&format=csv (admin)", ok, detail)
+    return ok
+
+
+def test_raw_sales_json(admin_token):
+    r = requests.get(
+        f"{API}/reports/raw",
+        params={"type": "sale", "format": "json"},
+        headers=hdr(admin_token), timeout=60,
+    )
+    ok = r.status_code == 200
+    detail = f"HTTP {r.status_code}"
+    if ok:
+        body = r.json()
+        if not isinstance(body, dict) or "count" not in body or "rows" not in body:
+            ok = False
+            detail += " - missing count/rows"
+        else:
+            detail += f" - count={body['count']}, rows_len={len(body['rows'])}"
+    record("2c) /reports/raw type=sale&format=json (admin)", ok, detail)
+    return ok
+
+
+def test_raw_non_admin_forbidden(non_admin_token):
+    if not non_admin_token:
+        record("2d) /reports/raw non-admin → 403", False, "couldn't create non-admin user")
+        return False
+    r = requests.get(
+        f"{API}/reports/raw",
+        params={"type": "sale", "format": "csv"},
+        headers=hdr(non_admin_token), timeout=30,
+    )
+    ok = r.status_code == 403
+    detail = f"HTTP {r.status_code}"
+    if not ok:
+        detail += f" - expected 403, body={r.text[:120]}"
+    record("2d) /reports/raw non-admin (farmer token) → 403", ok, detail)
+    return ok
+
+
+def test_raw_future_date_zero_rows(admin_token):
+    r = requests.get(
+        f"{API}/reports/raw",
+        params={"type": "sale", "format": "json",
+                "start_date": "2099-01-01", "end_date": "2099-12-31"},
+        headers=hdr(admin_token), timeout=60,
+    )
+    ok = r.status_code == 200
+    detail = f"HTTP {r.status_code}"
+    if ok:
+        cnt = r.json().get("count", -1)
+        if cnt != 0:
+            ok = False
+            detail += f" - expected count=0, got {cnt}"
+        else:
+            detail += " - count=0"
+    record("2e) /reports/raw future date range → 0 rows", ok, detail)
+    return ok
+
+
+# ============================================================
+# Regression
+# ============================================================
+
+def test_customers_search(admin_token):
+    r = requests.get(
+        f"{API}/customers/search",
+        params={"q": "ram"},
+        headers=hdr(admin_token), timeout=30,
+    )
+    ok = r.status_code == 200 and isinstance(r.json(), list)
+    detail = f"HTTP {r.status_code}, len={len(r.json()) if ok else 'n/a'}"
+    record("3a) /customers/search?q=ram", ok, detail)
+    return ok
+
+
+def test_vendor_procurement_get(admin_token):
+    r = requests.get(
+        f"{API}/vendor-procurement",
+        headers=hdr(admin_token), timeout=30,
+    )
+    ok = r.status_code == 200
+    detail = f"HTTP {r.status_code}"
+    if ok:
+        body = r.json()
+        detail += f", len={len(body) if isinstance(body, list) else 'not_list'}"
+    record("3b) /vendor-procurement (GET)", ok, detail)
+    return ok
+
+
+# ============================================================
+# Main
+# ============================================================
 
 def main():
-    print(f"\n== Backend URL: {BASE_URL}  Tag: {TAG} ==\n")
-    failures = []
+    print(f"Base API: {API}")
+    admin_token = admin_login()
+    print(f"Admin login OK, token len={len(admin_token)}")
 
-    def check(label, cond, extra=""):
-        ok = _ok(label, cond, extra)
-        if not ok:
-            failures.append(label)
-        return ok
+    test_transactions_json_all(admin_token)
+    test_transactions_csv_all(admin_token)
+    test_transactions_csv_sale_only(admin_token)
+    test_transactions_csv_purchase_only(admin_token)
+    test_transactions_include_deleted(admin_token)
+    test_transactions_date_filter_narrows(admin_token)
 
-    # 1. Auth
-    headers = login_admin()
-    check("Admin login (admin/admin123)", True)
+    test_raw_sales_csv(admin_token)
+    test_raw_purchase_csv(admin_token)
+    test_raw_sales_json(admin_token)
+    non_admin_token = register_farmer_and_login()
+    test_raw_non_admin_forbidden(non_admin_token)
+    test_raw_future_date_zero_rows(admin_token)
 
-    # 2. Setup
-    product = ensure_product(headers)
-    outlet = ensure_outlet(headers)
-    vendor_resp = create_test_vendor(headers)
-    vendor_id = (
-        vendor_resp.get("id")
-        if isinstance(vendor_resp, dict)
-        else None
-    )
-    if not vendor_id:
-        # Fallback: search by TAG
-        r = requests.get(f"{API}/vendors", headers=headers, timeout=30)
-        for v in r.json():
-            if TAG in v.get("name", ""):
-                vendor_id = v["id"]
-                break
-    assert vendor_id, f"Couldn't resolve vendor id from {vendor_resp}"
-    check("Vendor created", True, f"id={vendor_id}")
+    test_customers_search(admin_token)
+    test_vendor_procurement_get(admin_token)
 
-    vendor_before = get_vendor(headers, vendor_id) or {}
-    dues_before = vendor_before.get("outstanding_dues", 0)
-    total_purchases_before = vendor_before.get("total_purchases", 0)
-    txn_count_before = vendor_before.get("transaction_count", 0)
-    stock_before = get_stock_qty(headers, outlet["id"], product["id"])
-    print(
-        f"   Baseline: outstanding_dues={dues_before}, total_purchases={total_purchases_before}, "
-        f"transaction_count={txn_count_before}, stock_qty={stock_before}"
-    )
-
-    # 3. Create a credit procurement so outstanding_dues increases
-    qty = 10.0
-    rate = 50.0
-    expected_total = qty * rate  # 500
-    proc_payload = {
-        "vendor_id": vendor_id,
-        "product_id": product["id"],
-        "quantity": qty,
-        "rate": rate,
-        "outlet_id": outlet["id"],
-        "payment_mode": "credit",
-        "cash_amount": 0,
-        "online_amount": 0,
-        "notes": f"Credit purchase {TAG}",
-    }
-    r = requests.post(f"{API}/vendor-procurement", headers=headers, json=proc_payload, timeout=30)
-    if not check(
-        "POST /api/vendor-procurement (credit)",
-        r.status_code == 200,
-        f"status={r.status_code} body={r.text[:200]}",
-    ):
-        return failures
-    proc_body = r.json()
-    procurement_id = proc_body.get("procurement_id")
-    receipt_number = proc_body.get("receipt_number")
-    check("procurement_id returned", bool(procurement_id), f"id={procurement_id}")
-
-    # Verify dues/stock went up
-    vendor_mid = get_vendor(headers, vendor_id) or {}
-    dues_mid = vendor_mid.get("outstanding_dues", 0)
-    total_purchases_mid = vendor_mid.get("total_purchases", 0)
-    txn_count_mid = vendor_mid.get("transaction_count", 0)
-    stock_mid = get_stock_qty(headers, outlet["id"], product["id"])
-    check(
-        "outstanding_dues increased by credit_amount",
-        abs((dues_mid - dues_before) - expected_total) < 1e-6,
-        f"{dues_before} -> {dues_mid} (delta expected {expected_total})",
-    )
-    check(
-        "total_purchases increased",
-        abs((total_purchases_mid - total_purchases_before) - expected_total) < 1e-6,
-        f"{total_purchases_before} -> {total_purchases_mid}",
-    )
-    check(
-        "transaction_count +1",
-        (txn_count_mid - txn_count_before) == 1,
-        f"{txn_count_before} -> {txn_count_mid}",
-    )
-    check(
-        "stock +quantity at outlet",
-        abs((stock_mid - stock_before) - qty) < 1e-6,
-        f"{stock_before} -> {stock_mid}",
-    )
-
-    # 4. DELETE /api/vendor-procurement/{id}?reason=test cancel -> expect 200
-    reason = "test cancel"
-    r = requests.delete(
-        f"{API}/vendor-procurement/{procurement_id}",
-        headers=headers,
-        params={"reason": reason},
-        timeout=30,
-    )
-    delete_ok = check(
-        "DELETE /api/vendor-procurement/{id}?reason=test%20cancel",
-        r.status_code == 200,
-        f"status={r.status_code} body={r.text[:300]}",
-    )
-    if not delete_ok:
-        return failures
-    del_body = r.json()
-    print(f"   delete response: {json.dumps(del_body, default=str)[:400]}")
-    check(
-        "delete.reversal_details.stock_reversed == True",
-        del_body.get("reversal_details", {}).get("stock_reversed") is True,
-    )
-    check(
-        "delete.reversal_details.vendor_ledger_adjusted == True",
-        del_body.get("reversal_details", {}).get("vendor_ledger_adjusted") is True,
-    )
-
-    # 5. Fetch vendor ledger & verify cancelled appearance
-    r = requests.get(f"{API}/vendors/{vendor_id}/ledger", headers=headers, timeout=30)
-    if not check("GET /api/vendors/{id}/ledger", r.status_code == 200, f"status={r.status_code}"):
-        return failures
-    ledger = r.json()
-    transactions = ledger.get("transactions", [])
-    summary = ledger.get("summary", {})
-
-    cancelled_txn = None
-    for t in transactions:
-        if t.get("id") == procurement_id:
-            cancelled_txn = t
-            break
-
-    check("cancelled purchase present in ledger.transactions", cancelled_txn is not None)
-    if cancelled_txn is not None:
-        check(
-            "transaction.is_cancelled is True",
-            cancelled_txn.get("is_cancelled") is True,
-            f"got {cancelled_txn.get('is_cancelled')}",
-        )
-        check(
-            "transaction.debit == 0",
-            (cancelled_txn.get("debit") or 0) == 0,
-            f"got {cancelled_txn.get('debit')}",
-        )
-        check(
-            "transaction.deleted_at populated",
-            bool(cancelled_txn.get("deleted_at")),
-            f"got {cancelled_txn.get('deleted_at')}",
-        )
-        check(
-            "transaction.deletion_reason == 'test cancel'",
-            cancelled_txn.get("deletion_reason") == reason,
-            f"got {cancelled_txn.get('deletion_reason')!r}",
-        )
-
-    # 6. Summary totals exclude the cancelled one
-    total_purchases_after_summary = summary.get("total_purchases", 0)
-    total_credit_given_after_summary = summary.get("total_credit_given", 0)
-    check(
-        "summary.total_purchases excludes cancelled (== 0 for this new vendor)",
-        abs(total_purchases_after_summary - 0) < 1e-6,
-        f"got {total_purchases_after_summary}",
-    )
-    check(
-        "summary.total_credit_given excludes cancelled (== 0 for this new vendor)",
-        abs(total_credit_given_after_summary - 0) < 1e-6,
-        f"got {total_credit_given_after_summary}",
-    )
-
-    # 7. Verify vendor.outstanding_dues reversed (back to baseline)
-    vendor_after = get_vendor(headers, vendor_id) or {}
-    dues_after = vendor_after.get("outstanding_dues", 0)
-    total_purchases_after = vendor_after.get("total_purchases", 0)
-    txn_count_after = vendor_after.get("transaction_count", 0)
-    check(
-        "vendor.outstanding_dues reversed to baseline",
-        abs(dues_after - dues_before) < 1e-6,
-        f"{dues_mid} -> {dues_after} (baseline {dues_before})",
-    )
-    check(
-        "vendor.total_purchases reversed to baseline",
-        abs(total_purchases_after - total_purchases_before) < 1e-6,
-        f"{total_purchases_mid} -> {total_purchases_after} (baseline {total_purchases_before})",
-    )
-    check(
-        "vendor.transaction_count decremented",
-        txn_count_after == txn_count_before,
-        f"{txn_count_mid} -> {txn_count_after} (baseline {txn_count_before})",
-    )
-
-    # 8. Stock quantity reduced back to baseline
-    stock_after = get_stock_qty(headers, outlet["id"], product["id"])
-    check(
-        "stock reversed at outlet (quantity -= qty)",
-        abs(stock_after - stock_before) < 1e-6,
-        f"{stock_mid} -> {stock_after} (baseline {stock_before})",
-    )
-
-    # 9. Extra: double-delete should be blocked
-    r2 = requests.delete(
-        f"{API}/vendor-procurement/{procurement_id}",
-        headers=headers,
-        params={"reason": "again"},
-        timeout=30,
-    )
-    check(
-        "double-delete blocked (4xx)",
-        r2.status_code in (400, 404, 409),
-        f"status={r2.status_code}",
-    )
-
-    print(f"\nDone. receipt_number={receipt_number}")
-    return failures
+    print("\n=== SUMMARY ===")
+    pass_n = sum(1 for _, ok, _ in results if ok)
+    fail_n = len(results) - pass_n
+    print(f"Total: {len(results)}, Pass: {pass_n}, Fail: {fail_n}")
+    for name, ok, detail in results:
+        print(f"  {'OK' if ok else 'FAIL'}: {name}  ::  {detail}")
+    sys.exit(0 if fail_n == 0 else 1)
 
 
 if __name__ == "__main__":
-    fails = main()
-    print("\n=== SUMMARY ===")
-    if not fails:
-        print("ALL CHECKS PASSED")
-    else:
-        print(f"FAILED CHECKS ({len(fails)}):")
-        for f in fails:
-            print(f"  - {f}")
+    main()

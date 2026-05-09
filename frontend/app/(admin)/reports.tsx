@@ -146,6 +146,44 @@ export default function ReportsScreen() {
     }
   };
 
+  const downloadCsvFromBackend = async (path: string, filename: string) => {
+    try {
+      const res = await api.get(path, { responseType: 'text' as any, transformResponse: [(d: any) => d] });
+      const csvText: string = typeof res.data === 'string' ? res.data : String(res.data ?? '');
+
+      if (Platform.OS === 'web') {
+        const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${filename}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } else {
+        const fileUri = FileSystem.documentDirectory + `${filename}.csv`;
+        await FileSystem.writeAsStringAsync(fileUri, csvText, {
+          encoding: FileSystem.EncodingType.UTF8,
+        });
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(fileUri, {
+            mimeType: 'text/csv',
+            dialogTitle: filename,
+          });
+        }
+      }
+
+      Alert.alert(
+        language === 'hi' ? 'सफल' : 'Success',
+        language === 'hi' ? 'CSV डाउनलोड हो गई' : 'CSV downloaded successfully'
+      );
+    } catch (error) {
+      console.error('CSV download error:', error);
+      throw error;
+    }
+  };
+
   const generateExcel = async (data: any[], filename: string) => {
     try {
       // Create worksheet
@@ -327,6 +365,48 @@ export default function ReportsScreen() {
           await generateExcel(data, `Purchase_Report_${dateStr}_${Date.now()}`);
           break;
         }
+
+        case 'transactions': {
+          const params = new URLSearchParams();
+          params.append('format', 'csv');
+          params.append('type', 'all');
+          if (dateRange?.start) params.append('start_date', dateRange.start);
+          if (dateRange?.end) params.append('end_date', dateRange.end);
+          const dateStr = dateRange?.start ? `${dateRange.start}_to_${dateRange.end}` : 'All';
+          await downloadCsvFromBackend(
+            `/reports/transactions?${params.toString()}`,
+            `Transactions_${dateStr}_${Date.now()}`
+          );
+          break;
+        }
+
+        case 'raw_sales': {
+          const params = new URLSearchParams();
+          params.append('format', 'csv');
+          params.append('type', 'sale');
+          if (dateRange?.start) params.append('start_date', dateRange.start);
+          if (dateRange?.end) params.append('end_date', dateRange.end);
+          const dateStr = dateRange?.start ? `${dateRange.start}_to_${dateRange.end}` : 'All';
+          await downloadCsvFromBackend(
+            `/reports/raw?${params.toString()}`,
+            `Raw_Sales_${dateStr}_${Date.now()}`
+          );
+          break;
+        }
+
+        case 'raw_purchases': {
+          const params = new URLSearchParams();
+          params.append('format', 'csv');
+          params.append('type', 'purchase');
+          if (dateRange?.start) params.append('start_date', dateRange.start);
+          if (dateRange?.end) params.append('end_date', dateRange.end);
+          const dateStr = dateRange?.start ? `${dateRange.start}_to_${dateRange.end}` : 'All';
+          await downloadCsvFromBackend(
+            `/reports/raw?${params.toString()}`,
+            `Raw_Purchases_${dateStr}_${Date.now()}`
+          );
+          break;
+        }
       }
     } catch (error: any) {
       console.error('Report error:', error);
@@ -400,8 +480,8 @@ export default function ReportsScreen() {
           <Ionicons name="information-circle" size={20} color="#1976D2" />
           <Text style={styles.infoText}>
             {language === 'hi'
-              ? 'रिपोर्ट Excel (.xlsx) फॉर्मेट में डाउनलोड होगी। Sales और Purchase रिपोर्ट में तारीख फ़िल्टर उपलब्ध है।'
-              : 'Reports download in Excel (.xlsx) format. Sales and Purchase reports support date filtering.'}
+              ? 'मानक रिपोर्ट Excel (.xlsx) में और एकीकृत/कच्ची रिपोर्ट CSV में डाउनलोड होंगी। सभी ट्रांज़ैक्शन रिपोर्ट में तारीख फ़िल्टर उपलब्ध है।'
+              : 'Standard reports download as Excel (.xlsx); Unified/Raw reports download as CSV. All transaction reports support date filters.'}
           </Text>
         </View>
       </ScrollView>

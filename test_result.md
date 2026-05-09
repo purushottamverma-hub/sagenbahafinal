@@ -326,6 +326,36 @@ backend:
         agent: "testing"
         comment: "Regression checks all PASS (5/5): 1) POST /api/customers with customer_type='shareholder' and folio_number='FPO-001' creates customer correctly. 2) POST /api/sales tied to customer_id creates sale and generates bill_number (BILL202604290007). 3) GET /api/customers/{id}/ledger returns customer, transactions, summary, sales, payments keys. 4) GET /api/vendors/{id}/ledger returns vendor, transactions, summary, purchases, payments keys. 5) DELETE /api/sales/{sale_id} performs auto-reversal (stock restored + customer ledger adjusted) and returns reversal_details. No data wiped - test entities flagged with TEST_ prefix."
 
+  - task: "Reports - Unified Transactions CSV Export (/api/reports/transactions)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Wired endpoint /api/reports/transactions?format=csv with optional filters: start_date, end_date (YYYY-MM-DD), type=sale|purchase|all, customer_id, vendor_id, outlet_id, include_deleted. Returns StreamingResponse with text/csv and Content-Disposition. Each row contains: date, time, type, reference, person_name, outlet, product, variety, quantity, rate, amount, total, payment_mode, is_cancelled. Agent users are auto-restricted to their own outlet_id. Need to verify: (a) format=csv stream works with valid headers, (b) filters apply correctly, (c) include_deleted toggles cancelled rows."
+      - working: true
+        agent: "testing"
+        comment: "All 6 sub-cases PASS. (1a) format=json&type=all → 200, body has {count:19, rows:[...]} with all 14 expected keys (date,time,type,reference,person_name,outlet,product,variety,quantity,rate,amount,total,payment_mode,is_cancelled). (1b) format=csv&type=all → 200, Content-Type=text/csv, Content-Disposition=attachment; filename=transactions_<ts>.csv, header row matches expected 14 columns exactly, 19 data rows. (1c) type=sale (2020-01-01..2030-12-31) → 200 CSV, 15 rows all type='Sale'. (1d) type=purchase → 200 CSV, 4 rows all type='Purchase'. (1e) include_deleted toggle works: default=19 rows with 0 cancelled (correctly excluded), include_deleted=true=25 rows including 6 cancelled rows with is_cancelled=true. (1f) start_date/end_date narrowing: 1990 range returns 0 data rows (only header). Date filter, type filter, and is_deleted filter all working correctly. No regressions observed."
+
+  - task: "Reports - Raw Sales/Purchases CSV Export (/api/reports/raw)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Wired endpoint /api/reports/raw?type=sale|purchase&format=csv with optional start_date, end_date. Admin-only (require_admin). Streams raw collection dump as CSV with union-of-keys headers, JSON-encoding nested list/dict fields and ISO-formatting datetimes. Need to verify: (a) admin auth required (non-admin gets 403), (b) type=sale dumps from db.sales and type=purchase dumps from db.vendor_procurement, (c) date filtering on created_at, (d) headers/row count consistency."
+      - working: true
+        agent: "testing"
+        comment: "All 5 sub-cases PASS. (2a) Admin GET ?type=sale&format=csv → 200, Content-Type=text/csv, header_cols=24 including {id, bill_number, items}, 20 data rows. items column JSON-encoded correctly (no list/dict serialization errors). (2b) Admin GET ?type=purchase&format=csv → 200, header_cols=29 including {id, receipt_number, vendor_id}, 5 data rows from db.vendor_procurement. (2c) Admin GET ?type=sale&format=json → 200 with {count:20, rows:[20 docs]}, no _id leakage. (2d) Non-admin (freshly registered farmer token) GET → 403 'Admin access required' (require_admin enforced). (2e) Date filter start_date=2099-01-01..end_date=2099-12-31 → count=0. Endpoint production-ready."
+
 frontend:
   - task: "Admin Management Screen (Outlets, Products, Vendors, Customers, Farmers)"
     implemented: true
@@ -681,3 +711,64 @@ agent_communication:
       Gap closed. No other regressions observed. Feature is production-ready.
 
       Test artifacts use TEST_<uuid> prefix. No data wiped. Created /app/backend_test.py with all tests."
+
+metadata:
+  created_by: "main_agent"
+  version: "1.7"
+  test_sequence: 7
+  run_ui: false
+
+test_plan:
+  current_focus: []
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+  - agent: "main"
+    message: |
+      Reports CSV Export wiring (Feb 2026):
+      Frontend (/app/frontend/app/(admin)/reports.tsx):
+      - Added 3 new ReportType options: 'transactions' (Unified CSV), 'raw_sales' (CSV dump), 'raw_purchases' (CSV dump). All 3 support date filters.
+      - New helper downloadCsvFromBackend(path, filename) handles axios responseType='text', writes to FileSystem on native and triggers a Blob download on web. Shares via expo-sharing on native.
+      - Added 3 switch cases in handleGenerateReport: 'transactions' calls /api/reports/transactions?format=csv&type=all, 'raw_sales' calls /api/reports/raw?type=sale&format=csv, 'raw_purchases' calls /api/reports/raw?type=purchase&format=csv. Date range params propagated.
+      - Updated info-box copy to mention CSV vs Excel split.
+
+      Backend (already in place from prior session, not modified now):
+      - GET /api/reports/transactions (any authenticated user, agents auto-restricted to their outlet)
+      - GET /api/reports/raw (admin-only)
+
+      Please test the two backend endpoints against the test_plan focus list. Sample inputs:
+      1) Admin login (admin/admin123) → Bearer token.
+      2) GET /api/reports/transactions?format=csv&type=all&start_date=2026-01-01&end_date=2026-12-31 → expect 200, Content-Type starts with text/csv, header row present, body lines >= 1.
+      3) GET /api/reports/transactions?format=json&type=sale → expect 200 JSON with {count, rows}.
+      4) GET /api/reports/transactions?format=csv&type=purchase → no sales rows, only purchase rows.
+      5) GET /api/reports/raw?type=sale&format=csv → 200 CSV dump (admin only).
+
+  - agent: "testing"
+    message: |
+      Reports CSV endpoints testing completed (May 9 2026). Test file: /app/backend_test.py — 13/13 PASS.
+
+      /api/reports/transactions (any logged-in user) — 6/6 PASS:
+      • format=json&type=all → 200 {count:19, rows:[...]} with all 14 expected keys (date,time,type,reference,person_name,outlet,product,variety,quantity,rate,amount,total,payment_mode,is_cancelled).
+      • format=csv&type=all → 200, Content-Type=text/csv, Content-Disposition=attachment;filename=transactions_<ts>.csv, header row exact match, 19 data rows.
+      • type=sale (2020..2030 range) → 15 rows, every type column == "Sale".
+      • type=purchase → 4 rows, every type column == "Purchase".
+      • include_deleted toggle works: default=19 rows (0 cancelled, correctly hidden), include_deleted=true=25 rows including 6 cancelled rows with is_cancelled=true. Soft-delete filtering verified.
+      • Date filter: start_date=1990-01-01..end_date=1990-12-31 → 0 data rows (only header).
+
+      /api/reports/raw (admin only) — 5/5 PASS:
+      • Admin GET ?type=sale&format=csv → 200 text/csv, header_cols=24 includes {id, bill_number, items}, 20 data rows. Nested items list correctly JSON-encoded.
+      • Admin GET ?type=purchase&format=csv → 200, header_cols=29 includes {id, receipt_number, vendor_id}, 5 data rows from db.vendor_procurement.
+      • Admin GET ?type=sale&format=json → 200 {count:20, rows:[20 docs]}, no _id leakage.
+      • Non-admin (freshly registered farmer token) GET → 403 'Admin access required' (require_admin enforced).
+      • Future date filter (2099) → count=0.
+
+      Regression sanity — 2/2 PASS:
+      • GET /api/customers/search?q=ram → 200 (1 result)
+      • GET /api/vendor-procurement → 200 (4 records)
+
+      No data was mutated; only created one TEST_<uuid>-prefixed farmer user via /auth/register for the 403 check (left in DB as inactive farmer, no impact on live data). Both Reports endpoints are production-ready.
+
+      6) GET /api/reports/raw?type=purchase&format=csv → 200 CSV dump.
+      7) Non-admin (agent) hitting /api/reports/raw → 403.
+      Do NOT delete or mutate live records. Read-only verification only.
