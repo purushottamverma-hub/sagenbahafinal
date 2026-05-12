@@ -505,14 +505,40 @@ frontend_review:
     implemented: true
     working: "NA"
     file: "/app/frontend/app/(admin)/reports.tsx"
-    stuck_count: 0
+    stuck_count: 1
     priority: "high"
     needs_retesting: true
     status_history:
       - working: "NA"
         agent: "testing"
         comment: |
-          Partial frontend verification (May 12 2026):
+          RE-RUN ATTEMPT (May 12 2026 — second pass):
+          Could NOT complete per-tile alert capture in this session. Findings & blockers:
+          (1) Language toggle to ENGLISH did NOT take effect on the admin dashboard. Tried two approaches: (a) localStorage.setItem('settings-store', JSON.stringify({state:{language:'en'},version:0})) + reload — store key may differ; UI stayed in Hindi after reload. (b) Clicking the "EN" pill on the login screen toggled the login page text to English, but after logging in the admin dashboard/reports screen still rendered in Hindi. The actual settings-store persistence key the app uses is unclear from black-box; main agent should confirm the AsyncStorage key used by zustand persist (likely 'settings-store' but maybe nested under a different key/version for native vs web).
+          (2) On reports route the Hindi tile list rendered correctly and the Sales tile tap opened a date-filter modal showing "तारीख चुनें" preset chips (आज / कल / पिछले 7 दिन / इस महीने / पिछला महीना / कस्टम), a date range row, and a green "रिपोर्ट डाउनलोड करें" (Download Report) primary button — so per-tile flow is reachable. However my matchers for the Generate button were "Generate Report" / "जनरेट करें" which do NOT exist in the current UI; the actual button text is "रिपोर्ट डाउनलोड करें". I did not click the correct button, so no report request was actually fired during the first pass.
+          (3) On the second pass the login attempt did not persist (page returned to /login) — likely because the EN pill click navigated/reset state before the auth token settled.
+          (4) RN-Web Alert.alert renders as a custom modal in the DOM, NOT as a native browser dialog, so page.on("dialog") will NEVER fire for these alerts. Future tests must scrape DOM text for substrings like "Success" / "सफल" / "No data" / "कोई डेटा नहीं" / "Failed" / "विफल" / "CSV downloaded" / "रिकॉर्ड" — which I added in pass 2 but never reached due to login regression.
+          (5) Browser automation budget exhausted (3/3 calls used). Could not retry.
+
+          What is verified (from code review + screenshots from pass 1):
+          - All 8 tiles render correctly on /reports (visual confirmation in screenshots from both passes).
+          - Tile order matches spec.
+          - Date filter modal opens for sales/purchase/transactions/raw_sales/raw_purchases tiles.
+          - Backend /api/reports/transactions and /api/reports/raw already validated 13/13 PASS in earlier rounds.
+
+          What is NOT yet verified end-to-end via UI tap-test:
+          - That tapping each tile + selecting "इस महीने" + clicking "रिपोर्ट डाउनलोड करें" produces either a Success/CSV-downloaded alert or a No-data alert (and NEVER a "Failed to generate report" / "रिपोर्ट बनाने में विफल" alert).
+
+          Recommended next steps for main agent (or another tester run):
+          1) Identify the exact AsyncStorage/localStorage key used by the zustand settings store so EN can be force-set OR add a more discoverable EN/HI toggle on the admin dashboard header.
+          2) Re-run the per-tile validation using these working selectors:
+             - Tile text matchers: 'बिक्री रिपोर्ट', 'स्टॉक रिपोर्ट', 'ग्राहक रिपोर्ट', 'किसान रिपोर्ट', 'खरीद रिपोर्ट', 'एकीकृत लेन-देन (CSV)', 'कच्चा बिक्री डेटा (CSV)', 'कच्चा खरीद डेटा (CSV)'
+             - Preset chip: 'इस महीने'
+             - Generate button: 'रिपोर्ट डाउनलोड करें' (NOT 'Generate Report')
+             - Alert capture: scrape DOM, do NOT rely on page.on('dialog').
+          3) For the 3 lower tiles (Unified Transactions / Raw Sales / Raw Purchase) page.scrollBy is required since the grid is vertical and they sit below the fold on a 390x844 viewport.
+
+          (PRIOR PASS — May 12 2026 first attempt):
           (a) Reports page loads and the tile grid renders ALL 8 tiles. Confirmed visually in screenshot at /reports: बिक्री रिपोर्ट (Sales), स्टॉक रिपोर्ट (Stock), ग्राहक रिपोर्ट (Customer), किसान रिपोर्ट (Farmer), खरीद रिपोर्ट (Purchase), एकीकृत लेन-देन (CSV) (Unified Transactions), कच्चा बिक्री डेटा (CSV) (Raw Sales), कच्चा खरीद डेटा (CSV) (Raw Purchase). All 8 are tappable cards in a vertical list with download icons.
           (b) Could NOT complete per-tile tap+Generate+alert capture because the LIVE app defaults to Hindi and my Playwright text matchers were English-only — locators timed out. Browser-automation call budget exhausted (3/3) before re-running with Hindi matchers.
           (c) Minor copy bug: Reports header subtitle in Hindi still reads "Excel में डाउनलोड करें" — should be CSV. The English subtitle was updated per code but Hindi translation not updated.
