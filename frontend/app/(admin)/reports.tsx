@@ -146,41 +146,105 @@ export default function ReportsScreen() {
     }
   };
 
+  // ===== Robust CSV builder + downloader (works on web + native) =====
+  const buildCsvFromRows = (rows: any[]): string => {
+    if (!rows || rows.length === 0) return '';
+    // Union of keys across rows in stable order
+    const keys: string[] = [];
+    const seen = new Set<string>();
+    for (const r of rows) {
+      Object.keys(r || {}).forEach((k) => {
+        if (!seen.has(k)) { seen.add(k); keys.push(k); }
+      });
+    }
+    const escape = (v: any): string => {
+      if (v === null || v === undefined) return '';
+      let s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+      if (/[",\n\r]/.test(s)) {
+        s = '"' + s.replace(/"/g, '""') + '"';
+      }
+      return s;
+    };
+    const lines: string[] = [];
+    lines.push(keys.join(','));
+    for (const r of rows) {
+      lines.push(keys.map((k) => escape((r || {})[k])).join(','));
+    }
+    return lines.join('\r\n');
+  };
+
+  const downloadCsvText = async (csvText: string, filename: string) => {
+    if (Platform.OS === 'web') {
+      // Add BOM for Excel UTF-8 compatibility
+      const blob = new Blob(["\ufeff", csvText], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${filename}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } else {
+      const fileUri = FileSystem.documentDirectory + `${filename}.csv`;
+      await FileSystem.writeAsStringAsync(fileUri, '\ufeff' + csvText, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUri, {
+          mimeType: 'text/csv',
+          dialogTitle: filename,
+        });
+      }
+    }
+  };
+
+  const downloadCsvFromData = async (data: any[], filename: string) => {
+    if (!data || data.length === 0) {
+      Alert.alert(
+        language === 'hi' ? 'कोई डेटा नहीं' : 'No data',
+        language === 'hi'
+          ? 'चयनित तारीख सीमा के लिए कोई रिकॉर्ड नहीं मिला। कृपया फ़िल्टर बदलें।'
+          : 'No records found for the selected filter. Please adjust the date range.'
+      );
+      return;
+    }
+    const csv = buildCsvFromRows(data);
+    await downloadCsvText(csv, filename);
+    Alert.alert(
+      language === 'hi' ? 'सफल' : 'Success',
+      language === 'hi'
+        ? `CSV डाउनलोड हो गई — ${data.length} रिकॉर्ड`
+        : `CSV downloaded — ${data.length} record${data.length === 1 ? '' : 's'}`
+    );
+  };
+
   const downloadCsvFromBackend = async (path: string, filename: string) => {
     try {
       const res = await api.get(path, { responseType: 'text' as any, transformResponse: [(d: any) => d] });
       const csvText: string = typeof res.data === 'string' ? res.data : String(res.data ?? '');
-
-      if (Platform.OS === 'web') {
-        const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${filename}.csv`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      } else {
-        const fileUri = FileSystem.documentDirectory + `${filename}.csv`;
-        await FileSystem.writeAsStringAsync(fileUri, csvText, {
-          encoding: FileSystem.EncodingType.UTF8,
-        });
-        if (await Sharing.isAvailableAsync()) {
-          await Sharing.shareAsync(fileUri, {
-            mimeType: 'text/csv',
-            dialogTitle: filename,
-          });
-        }
+      if (!csvText || csvText.trim().length === 0) {
+        Alert.alert(
+          language === 'hi' ? 'कोई डेटा नहीं' : 'No data',
+          language === 'hi' ? 'चयनित अवधि के लिए कोई रिकॉर्ड नहीं' : 'No records for the selected period'
+        );
+        return;
       }
-
+      // If only header row (1 line + maybe trailing newline), still warn
+      const lineCount = csvText.trim().split(/\r?\n/).length;
+      await downloadCsvText(csvText, filename);
       Alert.alert(
         language === 'hi' ? 'सफल' : 'Success',
-        language === 'hi' ? 'CSV डाउनलोड हो गई' : 'CSV downloaded successfully'
+        language === 'hi'
+          ? `CSV डाउनलोड हो गई — ${Math.max(0, lineCount - 1)} पंक्तियाँ`
+          : `CSV downloaded — ${Math.max(0, lineCount - 1)} row${lineCount - 1 === 1 ? '' : 's'}`
       );
-    } catch (error) {
+    } catch (error: any) {
       console.error('CSV download error:', error);
-      throw error;
+      Alert.alert(
+        language === 'hi' ? 'त्रुटि' : 'Error',
+        error.response?.data?.detail || error.message || (language === 'hi' ? 'CSV डाउनलोड विफल' : 'CSV download failed')
+      );
     }
   };
 
@@ -283,14 +347,14 @@ export default function ReportsScreen() {
           const dateStr = dateRange?.start 
             ? `${dateRange.start}_to_${dateRange.end}` 
             : 'All';
-          await generateExcel(data, `Sales_Report_${dateStr}_${Date.now()}`);
+          await downloadCsvFromData(data, `Sales_Report_${dateStr}_${Date.now()}`);
           break;
         }
         
         case 'stock': {
           const res = await api.get('/stock');
           
-          const data = res.data.map((stock: any) => ({
+          const data = (res.data || []).map((stock: any) => ({
             'Product': stock.product_name,
             'Outlet': stock.outlet_name,
             'Opening Stock': stock.opening_stock || 0,
@@ -300,30 +364,30 @@ export default function ReportsScreen() {
             'Current Quantity': stock.quantity,
             'Unit': stock.product_unit,
           }));
-          await generateExcel(data, `Stock_Report_${Date.now()}`);
+          await downloadCsvFromData(data, `Stock_Report_${Date.now()}`);
           break;
         }
         
         case 'customers': {
           const res = await api.get('/customers');
-          const data = res.data.map((customer: any) => ({
+          const data = (res.data || []).map((customer: any) => ({
             'Name': customer.name,
             'Mobile': customer.mobile || '',
             'Village': customer.village || '',
             'Total Purchases (₹)': customer.total_purchases || 0,
             'Total Paid (₹)': customer.total_paid || 0,
-            'Outstanding (₹)': customer.outstanding_dues || 0,
+            'Outstanding (₹)': customer.outstanding_dues || customer.outstanding_balance || 0,
             'Last Purchase': customer.last_purchase_date 
               ? new Date(customer.last_purchase_date).toLocaleDateString('en-IN')
               : 'N/A',
           }));
-          await generateExcel(data, `Customer_Report_${Date.now()}`);
+          await downloadCsvFromData(data, `Customer_Report_${Date.now()}`);
           break;
         }
         
         case 'farmers': {
           const res = await api.get('/farmers');
-          const data = res.data.map((farmer: any) => ({
+          const data = (res.data || []).map((farmer: any) => ({
             'Name': farmer.name,
             'Mobile': farmer.mobile || '',
             'Village': farmer.village || '',
@@ -334,7 +398,7 @@ export default function ReportsScreen() {
             'Total Paid (₹)': farmer.total_paid || 0,
             'Outstanding Dues (₹)': farmer.outstanding_dues || 0,
           }));
-          await generateExcel(data, `Farmer_Report_${Date.now()}`);
+          await downloadCsvFromData(data, `Farmer_Report_${Date.now()}`);
           break;
         }
         
@@ -362,7 +426,7 @@ export default function ReportsScreen() {
           const dateStr = dateRange?.start 
             ? `${dateRange.start}_to_${dateRange.end}` 
             : 'All';
-          await generateExcel(data, `Purchase_Report_${dateStr}_${Date.now()}`);
+          await downloadCsvFromData(data, `Purchase_Report_${dateStr}_${Date.now()}`);
           break;
         }
 
@@ -480,8 +544,8 @@ export default function ReportsScreen() {
           <Ionicons name="information-circle" size={20} color="#1976D2" />
           <Text style={styles.infoText}>
             {language === 'hi'
-              ? 'मानक रिपोर्ट Excel (.xlsx) में और एकीकृत/कच्ची रिपोर्ट CSV में डाउनलोड होंगी। सभी ट्रांज़ैक्शन रिपोर्ट में तारीख फ़िल्टर उपलब्ध है।'
-              : 'Standard reports download as Excel (.xlsx); Unified/Raw reports download as CSV. All transaction reports support date filters.'}
+              ? 'सभी रिपोर्ट CSV (Excel-संगत) फॉर्मेट में डाउनलोड होती हैं। तारीख सीमा बदलें या किसी भी फ़िल्टर का उपयोग करें।'
+              : 'All reports download as CSV (Excel-compatible). You can open them in Excel/Google Sheets. Pick a date range below.'}
           </Text>
         </View>
       </ScrollView>

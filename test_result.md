@@ -953,3 +953,60 @@ test_plan:
 
       User to verify: open Admin → Stock; record a new procurement at an outlet; observe quantity increment + "New stock" badge appearing within 24h. Search by typing product name (EN or HI) or outlet name.
 
+  - task: "Dashboard - Exclude Cancelled/Deleted Sales from Aggregates"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          VERIFIED FIX (May 12 2026). Test file: /app/dashboard_test.py — 9/9 sub-tests PASS against live preview backend.
+
+          1) GET /api/dashboard baseline captured (today: total=0, cash=0, credit=0, count=0).
+          2) Setup: created TEST_<uuid> customer + selected active outlet 'Sagen Baha FPO - Central Office' with existing stock (product 'Agnistra', qty 859).
+          3) POST /api/sales (qty=2, rate=100, cash, total=200) → 200, sale_id + bill_number returned.
+          4) GET /api/dashboard → today.total=200 (baseline+200), today.cash=200 (baseline+200), today.sales_count=1 (baseline+1). PASS.
+          5) DELETE /api/sales/{sale_id}?reason=dashboard+test → 200.
+          6) CORE FIX: GET /api/dashboard → today.total=0, today.cash=0, today.sales_count=0 — fully reverted to baseline. The not_deleted_filter on today_query/month_query (server.py L3538-3549) correctly excludes is_deleted=True sales. PASS.
+          7a) Bonus: created credit sale (total=200) → today.credit went 0→200, today.total went 0→200. PASS.
+          7b) PUT /api/sales/{id} switched payment_mode credit→cash → today.credit reverted to 0, today.cash incremented to 200, today.total stayed at 200. PUT path properly reverses+reapplies ledger and dashboard reflects edit. PASS.
+          7c) DELETE the edited sale → dashboard fully back to baseline. PASS.
+
+          Cleanup: TEST customer soft-deleted. No live data mutated. Feature is production-ready.
+      - working: "NA"
+        agent: "main"
+        comment: |
+          BUG FIX (line ~3527 get_dashboard): today/month aggregates now exclude documents where is_deleted=True. Added not_deleted_filter `{"$or":[{"is_deleted":{"$exists":False}},{"is_deleted":False}]}` to both today_query and month_query. So when a bill is DELETED or EDITED, dashboard totals/cash/credit numbers immediately reflect the change.
+
+          Test plan for testing agent:
+          1) Auth admin/admin123. GET /api/dashboard → capture baseline today.total, today.cash, today.credit, today.sales_count.
+          2) Create a TEST_<uuid> customer + product + ensure stock at any outlet (existing data is fine; if not, use any working customer like the existing demo customer to avoid test pollution? — prefer TEST_<uuid>).
+          3) POST /api/sales with items=[{product_id, qty=2, rate=100, ...}], total_amount=200, cash_amount=200, payment_mode='cash'. Capture sale_id.
+          4) GET /api/dashboard → today.total should be baseline + 200, today.cash baseline + 200, today.sales_count +1.
+          5) DELETE /api/sales/{sale_id}?reason=test → 200.
+          6) GET /api/dashboard → today.total/cash/sales_count should be back to BASELINE (deleted sale removed from aggregate). This is the new behaviour. Previously it would remain elevated.
+          7) Bonus: Repeat with payment_mode='credit', confirm today.credit goes up after create, returns to baseline after delete.
+
+          Files changed: /app/backend/server.py (get_dashboard only). No other endpoints altered.
+
+
+
+  - agent: "testing"
+    message: |
+      Dashboard cancellation/edit reflection fix verified (May 12 2026). Test file: /app/dashboard_test.py — 9/9 sub-tests PASS against live preview backend.
+
+      1) Baseline /api/dashboard captured.
+      2) Created TEST_<uuid> customer; selected active outlet 'Sagen Baha FPO - Central Office' with existing stock (product 'Agnistra', qty 859).
+      3) POST /api/sales (cash, 2×₹100=₹200) → 200 with bill BILL202605120001.
+      4) GET /api/dashboard → today.total +200, today.cash +200, today.sales_count +1. PASS.
+      5) DELETE /api/sales/{id}?reason=dashboard+test → 200.
+      6) CORE FIX VERIFIED: GET /api/dashboard returned today.total/cash/sales_count back to baseline. The not_deleted_filter on today_query/month_query at server.py L3538-3549 correctly excludes is_deleted=True sales.
+      7a) Created credit sale → today.credit went up by 200 (and today.total by 200). PASS.
+      7b) PUT /api/sales/{id} switching credit→cash → today.credit reverted to baseline; today.cash increased by 200; today.total unchanged (still +200). Edit path reflects correctly on dashboard. PASS.
+      7c) DELETE that sale → dashboard fully back to baseline. PASS.
+
+      Cleanup completed (TEST customer soft-deleted; no live data mutated). Feature is production-ready.

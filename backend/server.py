@@ -3534,15 +3534,18 @@ async def get_dashboard(current_user: dict = Depends(get_current_user)):
     if current_user["role"] == "agent" and current_user.get("outlet_id"):
         query["outlet_id"] = current_user["outlet_id"]
     
-    # Today's sales
-    today_query = {**query, "created_at": {"$gte": today}}
+    # Exclude deleted/cancelled sales from dashboard aggregates
+    not_deleted_filter = {"$or": [{"is_deleted": {"$exists": False}}, {"is_deleted": False}]}
+
+    # Today's sales (exclude cancelled)
+    today_query = {**query, "created_at": {"$gte": today}, **not_deleted_filter}
     today_sales = await db.sales.find(today_query).to_list(1000)
     today_total = sum(s.get("total_amount", 0) for s in today_sales)
     today_cash = sum(s.get("cash_amount", 0) for s in today_sales)
     today_credit = sum(s.get("credit_amount", 0) for s in today_sales)
     
-    # Month's sales
-    month_query = {**query, "created_at": {"$gte": month_start}}
+    # Month's sales (exclude cancelled)
+    month_query = {**query, "created_at": {"$gte": month_start}, **not_deleted_filter}
     month_sales = await db.sales.find(month_query).to_list(1000)
     month_total = sum(s.get("total_amount", 0) for s in month_sales)
     month_cash = sum(s.get("cash_amount", 0) for s in month_sales)
