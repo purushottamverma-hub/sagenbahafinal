@@ -497,8 +497,8 @@ export default function ReportsScreen() {
         </Text>
         <Text style={styles.subtitle}>
           {language === 'hi' 
-            ? 'Excel में डाउनलोड करें' 
-            : 'Download reports in Excel format'}
+            ? 'CSV में डाउनलोड करें (Excel-संगत)' 
+            : 'Download reports as CSV (Excel-compatible)'}
         </Text>
       </View>
 
