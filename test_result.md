@@ -494,10 +494,57 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Admin Reports CSV Download (8 tiles)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+frontend_review:
+  - task: "Admin Reports CSV Download (8 tiles)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(admin)/reports.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "testing"
+        comment: |
+          Partial frontend verification (May 12 2026):
+          (a) Reports page loads and the tile grid renders ALL 8 tiles. Confirmed visually in screenshot at /reports: बिक्री रिपोर्ट (Sales), स्टॉक रिपोर्ट (Stock), ग्राहक रिपोर्ट (Customer), किसान रिपोर्ट (Farmer), खरीद रिपोर्ट (Purchase), एकीकृत लेन-देन (CSV) (Unified Transactions), कच्चा बिक्री डेटा (CSV) (Raw Sales), कच्चा खरीद डेटा (CSV) (Raw Purchase). All 8 are tappable cards in a vertical list with download icons.
+          (b) Could NOT complete per-tile tap+Generate+alert capture because the LIVE app defaults to Hindi and my Playwright text matchers were English-only — locators timed out. Browser-automation call budget exhausted (3/3) before re-running with Hindi matchers.
+          (c) Minor copy bug: Reports header subtitle in Hindi still reads "Excel में डाउनलोड करें" — should be CSV. The English subtitle was updated per code but Hindi translation not updated.
+          (d) Code review of /app/frontend/app/(admin)/reports.tsx confirms: all 8 cases (sales/stock/customers/farmers/purchases/transactions/raw_sales/raw_purchases) now route through downloadCsvFromData() or downloadCsvFromBackend(), both of which alert "No data" on empty and "CSV downloaded — N records/rows" on success. The legacy "Failed to generate report" string still exists in the global catch (line ~479) but is reachable only on hard exceptions, not on empty data.
+          (e) Backend endpoints /api/reports/transactions and /api/reports/raw were already verified 13/13 PASS in earlier round.
+          Recommendation: main agent (or another tester) should run the tile-tap flow once more using Hindi text matchers (e.g., 'बिक्री रिपोर्ट', 'इस महीने', 'जनरेट करें') to confirm no 'Failed to generate report' alerts appear.
+
+  - task: "Visual smoke - Login, bottom nav, dashboard"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/(auth)/login.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          (1) Login with admin/admin123 succeeds — URL transitions from /login to /, admin dashboard rendered showing 'नमस्ते, System Administrator'. (2) Dashboard tiles render: 'आज की बिक्री' (Today's Sales) with cash/online/credit split, 'इस महीने की बिक्री', and quick-summary tiles (6 ग्राहक / 1 किसान / 5 उत्पाद / 3 आउटलेट). Captured baseline today's sales total = ₹0 / 0 बिल for the demo admin. (3) Bottom nav renders with icons for all primary tabs (dashboard, sales, purchase, stock, reports plus extras like khata/customers/manage). (4) No red-screen errors during navigation.
+
+  - task: "Edit buttons + Stock search smoke check"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(admin)/sales.tsx, /app/frontend/app/(admin)/purchase.tsx, /app/frontend/app/(admin)/stock.tsx"
+    stuck_count: 0
+    priority: "low"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "testing"
+        comment: |
+          Could not visually confirm the new orange 'Edit' button on the sales bill modal, the pencil 'Edit' button on vendor procurement cards, or the green-bordered stock search card in this run — browser automation call budget exhausted before I could navigate into those screens with Hindi-aware selectors. Reports flow was prioritised per the review-request ordering. Main agent should run a short visual smoke test against /sales (tap a bill), /purchase (look at procurement cards), /stock (search box) — or instruct the tester to re-run with Hindi matchers.
 
 backend_phase3:
   - task: "Product Varieties (Phase 3)"
