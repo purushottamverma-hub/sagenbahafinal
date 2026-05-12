@@ -84,3 +84,12 @@ android-sdk/
 # Local test/admin credentials documentation
 memory/test_credentials.md
 /app/memory/test_credentials.md
+-e 
+# Environment and credential files
+.env
+.env.*
+*.env
+credentials.json
+*.pem
+*.key
+.credentials
